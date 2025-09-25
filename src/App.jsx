@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { aonToAoa, looksLikeEdgeId } from '@/utils/converting'; // новое
+import { aonToAoa, looksLikeEdgeId } from '@/utils/converting'; 
 import { 
   Calculator, 
   FileText, 
@@ -25,7 +25,7 @@ import TaskInput from './components/TaskInput';
 import CalculationResults from './components/CalculationResults';
 import NetworkDiagram from './components/NetworkDiagram';
 import GanttChart from './components/GanttChart';
-import ImportExport from './components/ImportExport';
+import ExportOnly from './components/ImportExport';
 import LogViewer from './components/LogViewer';
 import ProjectDashboard from './components/ProjectDashboard';
 import Calendar from './components/Calendar';
@@ -34,6 +34,7 @@ import EnhancedExport from './components/EnhancedExport';
 import ResourceCalendar from './components/ResourceCalendar';
 import ThemeSettings from './components/ThemeSettings';
 import WhatIfModeling from './components/WhatIfModeling';
+import UserGuide from './components/UserGuide';
 import { SPUCalculation } from './utils/spuCalculations';
 import { validateNetwork } from './utils/calculations';
 import { sampleTasks as exampleTasks } from './types/index';
@@ -55,6 +56,7 @@ function App() {
   const [isCalculating, setIsCalculating] = useState(false);
   const [activeTab, setActiveTab] = useState('input');
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
+  const [appZoom, setAppZoom] = useState(1);
   const networkDiagramRef = useRef(null);
 
   const { loadAutosavedData, clearAutosavedData, hasAutosavedData } = useAutosave(project, calculationResults);
@@ -70,7 +72,7 @@ function App() {
     }
   }, []);
 
-  // новое
+  
   useEffect(() => {
     const off = window.electronAPI?.onMenuLoadExampleBasic?.(() => {
       handleLoadExample();
@@ -79,9 +81,9 @@ function App() {
       window.electronAPI?.removeAllListeners?.('menu-load-example-basic');
     };
   }, []);
-  //
+  
 
-  // новое
+  
   useEffect(() => {
     const off = window.electronAPI?.onMenuLoadExampleRequired?.(async () => {
       try {
@@ -94,7 +96,112 @@ function App() {
       window.electronAPI?.removeAllListeners?.('menu-load-example-required');
     };
   }, []);
-  //
+
+
+  useEffect(() => {
+    const off = window.electronAPI?.onMenuShowHelp?.(() => {
+      handleLoadHelp();
+    });
+    return () => {
+      window.electronAPI?.removeAllListeners?.('menu-show-help');
+    };
+  }, []);
+  
+
+ 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === '=' || e.key === '+') {
+          e.preventDefault();
+          setAppZoom(prev => Math.min(prev + 0.1, 2));
+        } else if (e.key === '-') {
+          e.preventDefault();
+          setAppZoom(prev => Math.max(prev - 0.1, 0.5));
+        } else if (e.key === 's') {
+          e.preventDefault();
+          handleSaveProject();
+        } else if (e.key === 'o') {
+          e.preventDefault();
+          handleOpenProject();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+ 
+  const handleSaveProject = () => {
+    try {
+      const projectData = {
+        project,
+        calculationResults,
+        savedAt: new Date().toISOString(),
+        version: '1.0'
+      };
+      
+      const dataStr = JSON.stringify(projectData, null, 2);
+      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+      
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(dataBlob);
+      link.download = `${project.name || 'project'}_${new Date().toISOString().split('T')[0]}.spu`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      logger.logSystemEvent('PROJECT_SAVED', {
+        projectId: project.id,
+        tasksCount: project.tasks.length
+      });
+      
+      alert('Проект успешно сохранен!');
+    } catch (error) {
+      logger.logError('PROJECT_SAVE_ERROR', { error: error.message });
+      alert('Ошибка при сохранении проекта: ' + error.message);
+    }
+  };
+
+
+  const handleOpenProject = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.spu,.json';
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const projectData = JSON.parse(e.target.result);
+            
+            if (projectData.project && projectData.project.tasks) {
+              setProject(projectData.project);
+              if (projectData.calculationResults) {
+                setCalculationResults(projectData.calculationResults);
+              }
+              
+              logger.logSystemEvent('PROJECT_LOADED', {
+                projectId: projectData.project.id,
+                tasksCount: projectData.project.tasks.length
+              });
+              
+              alert('Проект успешно загружен!');
+            } else {
+              throw new Error('Неверный формат файла проекта');
+            }
+          } catch (error) {
+            logger.logError('PROJECT_LOAD_ERROR', { error: error.message });
+            alert('Ошибка при загрузке проекта: ' + error.message);
+          }
+        };
+        reader.readAsText(file);
+      }
+    };
+    input.click();
+  };
 
   const handleAddTask = (task) => {
     try {
@@ -156,11 +263,11 @@ function App() {
     }
   };
 
-  // новое
+ 
   const chooseExampleVariant = async () => {
-    // Fallback for browser environment without Electron API
+   
     if (!window.electronAPI?.showMessageBox) {
-      const choice = confirm('Загрузить базовый пример? (OK - базовый пример, Отмена - все обязательные из БД)');
+      const choice = confirm('Загрузить базовый пример? (OK - базовый пример, Отмена - пример рабочих данных)');
       if (choice) {
         return handleLoadExample();
       } else {
@@ -187,7 +294,7 @@ function App() {
   setIsCalculating(true);
   setValidationErrors([]);
 
-  try { // ниже тут очень много нового *************
+  try { 
     logger.logUserAction('START_CALCULATION', {
       tasksCount: project.tasks.length,
       projectId: project.id
@@ -228,14 +335,14 @@ function App() {
       };
     });
 
-    // ************
+   
 
-    const validation = validateNetwork(normalizedTasks); // новое
+    const validation = validateNetwork(normalizedTasks);
     if (!validation.isValid) {
       setValidationErrors(validation.errors);
       logger.logCalculationError(new Error('Validation failed'), {
         errors: validation.errors,
-        tasksCount: normalizedTasks.length // новое 
+        tasksCount: normalizedTasks.length 
       });
       return;
     }
@@ -283,7 +390,7 @@ function App() {
     }
   };
 
-  // в этом блоке новое
+
   const handleLoadRequiredFromDB = async () => {
     try {
       const all = (await window.electronAPI.invoke('templates:getAllRequired')) || [];
@@ -322,7 +429,16 @@ function App() {
     }
   };
 
-  // конец нового
+ const handleLoadHelp = () => {
+    console.log('handleLoadHelp called!');
+    if (userGuideRef.current) {
+      console.log('userGuideRef.current exists, calling open()...');
+      userGuideRef.current.open();
+     
+    } else {
+      console.error('userGuideRef.current is null. Is <UserGuide ref={...} /> rendered?');
+    }
+  };
 
 
   const handleClearAll = () => {
@@ -404,8 +520,8 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Диалог восстановления данных */}
+    <div className="min-h-screen w-full bg-background text-foreground">
+      
       {showRecoveryDialog && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <Card className="w-full max-w-md mx-4">
@@ -432,8 +548,8 @@ function App() {
         </div>
       )}
 
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Заголовок */}
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 app-container" style={{ transform: `scale(${appZoom})` }}>
+      
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">
             СПУ - Сетевое планирование и управление
@@ -453,7 +569,7 @@ function App() {
           </div>
         </div>
 
-        {/* Управление проектом */}
+        
         <Card className="mb-6">
           <CardHeader>
             <CardTitle>Управление проектом</CardTitle>
@@ -478,9 +594,21 @@ function App() {
                 <Trash2 className="h-4 w-4 mr-2" />
                 Очистить все
               </Button>
+
+              <Button onClick={handleSaveProject} variant="outline" title="Ctrl+S">
+                <Save className="h-4 w-4 mr-2" />
+                Сохранить проект
+              </Button>
+
+              <Button onClick={handleOpenProject} variant="outline" title="Ctrl+O">
+                <Upload className="h-4 w-4 mr-2" />
+                Открыть проект
+              </Button>
+
+              <UserGuide />
             </div>
 
-            {/* Статус расчета */}
+           
             {calculationResults && (
               <Alert className="mt-4 border-green-200 bg-green-50">
                 <CheckCircle className="h-4 w-4 text-green-600" />
@@ -492,7 +620,7 @@ function App() {
               </Alert>
             )}
 
-            {/* Ошибки валидации */}
+          
             {validationErrors.length > 0 && (
               <Alert className="mt-4 border-red-200 bg-red-50">
                 <AlertCircle className="h-4 w-4 text-red-600" />
@@ -509,30 +637,34 @@ function App() {
           </CardContent>
         </Card>
 
-        {/* Основные вкладки */}
+      
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
-          <TabsList className="grid w-full grid-cols-2 lg:grid-cols-6">
-            <TabsTrigger value="input" className="flex items-center gap-2">
+            <TabsList className="tabs-list grid w-full grid-cols-2 lg:grid-cols-7 min-w-max">
+            <TabsTrigger value="input" className="tabs-trigger flex items-center gap-2">
               <FileText className="h-4 w-4" />
               <span className="hidden sm:inline">Ввод работ</span>
             </TabsTrigger>
-            <TabsTrigger value="network" className="flex items-center gap-2">
+            <TabsTrigger value="network" className="tabs-trigger flex items-center gap-2">
               <Network className="h-4 w-4" />
               <span className="hidden sm:inline">Сетевой график</span>
             </TabsTrigger>
-            <TabsTrigger value="results" className="flex items-center gap-2">
+            <TabsTrigger value="results" className="tabs-trigger flex items-center gap-2">
               <Calculator className="h-4 w-4" />
               <span className="hidden sm:inline">Результаты</span>
             </TabsTrigger>
-            <TabsTrigger value="gantt" className="flex items-center gap-2">
+            <TabsTrigger value="gantt" className="tabs-trigger flex items-center gap-2">
               <BarChart3 className="h-4 w-4" />
               <span className="hidden sm:inline">Диаграмма Ганта</span>
             </TabsTrigger>
-            <TabsTrigger value="analysis" className="flex items-center gap-2">
+            <TabsTrigger value="calendar" className="tabs-trigger flex items-center gap-2">
+              <Activity className="h-4 w-4" />
+              <span className="hidden sm:inline">Календарь</span>
+            </TabsTrigger>
+            <TabsTrigger value="analysis" className="tabs-trigger flex items-center gap-2">
               <BarChart3 className="h-4 w-4" />
               <span className="hidden sm:inline">Анализ</span>
             </TabsTrigger>
-            <TabsTrigger value="tools" className="flex items-center gap-2">
+            <TabsTrigger value="tools" className="tabs-trigger flex items-center gap-2">
               <Settings className="h-4 w-4" />
               <span className="hidden sm:inline">Инструменты</span>
             </TabsTrigger>
@@ -639,31 +771,28 @@ function App() {
             </Tabs>
           </TabsContent>
 
+          <TabsContent value="calendar" className="space-y-4">
+            <Calendar 
+              project={project}
+              results={calculationResults}
+              onProjectUpdate={setProject}
+            />
+          </TabsContent>
+
           <TabsContent value="tools" className="space-y-4">
             {project.tasks.length > 0 || calculationResults ? (
               <>
-            <Tabs defaultValue="calendar" className="space-y-4">
-              <TabsList className="grid w-full grid-cols-4">
-                <TabsTrigger value="calendar">Календарь</TabsTrigger>
-                <TabsTrigger value="import-export">Импорт/Экспорт</TabsTrigger>
+            <Tabs defaultValue="export" className="space-y-4">
+              <TabsList className="grid w-full grid-cols-3">
+                <TabsTrigger value="export">Экспорт</TabsTrigger>
                 <TabsTrigger value="themes">Темы</TabsTrigger>
                 <TabsTrigger value="logs">Логи</TabsTrigger>
               </TabsList>
               
-              <TabsContent value="calendar">
-                <Calendar 
-                  project={project}
-                  results={calculationResults}
-                  onProjectUpdate={setProject}
-                />
-              </TabsContent>
-              
-              <TabsContent value="import-export">
-                <ImportExport 
+              <TabsContent value="export">
+                <ExportOnly 
                   project={project}
                   calculationResults={calculationResults}
-                  onProjectImport={handleProjectImport}
-                  onTasksImport={handleTasksImport}
                   networkDiagramRef={networkDiagramRef}
                 />
                 <EnhancedExport 
@@ -700,4 +829,3 @@ function App() {
 }
 
 export default App;
-

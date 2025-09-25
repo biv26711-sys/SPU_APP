@@ -5,11 +5,11 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { aonToAoa as converting, looksLikeEdgeId } from '@/utils/converting';
-import { 
-  Download, 
-  ZoomIn, 
-  ZoomOut, 
-  RotateCcw, 
+import {
+  Download,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
   Network,
   Info,
   Settings,
@@ -70,6 +70,38 @@ const NetworkDiagram = ({ results }) => {
     }
   }, [results, scale, offset, showLabels, showTimes, colorScheme]);
 
+  useEffect(() => {
+    const handleWheel = (e) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        const worldX = (mouseX - offset.x * scale) / scale;
+        const worldY = (mouseY - offset.y * scale) / scale;
+
+        const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1;
+        const newScale = Math.min(Math.max(scale * scaleFactor, 0.2), 5);
+
+        const newOffsetX = (mouseX - worldX * newScale) / newScale;
+        const newOffsetY = (mouseY - worldY * newScale) / newScale;
+
+        setScale(newScale);
+        setOffset({ x: newOffsetX, y: newOffsetY });
+      }
+    };
+
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.addEventListener('wheel', handleWheel, { passive: false });
+      return () => canvas.removeEventListener('wheel', handleWheel);
+    }
+  }, [scale, offset]);
+
   const drawNetwork = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -77,12 +109,10 @@ const NetworkDiagram = ({ results }) => {
     const ctx = canvas.getContext('2d');
     const rect = canvas.getBoundingClientRect();
 
-    // ретина
     canvas.width = rect.width * window.devicePixelRatio;
     canvas.height = rect.height * window.devicePixelRatio;
     ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
 
-    // фон + сетка
     ctx.fillStyle = colors.background;
     ctx.fillRect(0, 0, rect.width, rect.height);
     drawGrid(ctx, rect.width, rect.height);
@@ -92,28 +122,23 @@ const NetworkDiagram = ({ results }) => {
       return;
     }
 
-    // 1) берём исходные задачи
     const sourceTasks = Array.isArray(results.tasks) ? results.tasks : [];
 
-    // 2) если id не похожи на "i-j" — конвертируем AON -> AOA
     const needsAdapt = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)));
     const aoaTasks = needsAdapt ? converting(sourceTasks) : sourceTasks;
 
-    // 3) помечаем фиктивные рёбра (если адаптер не проставил) и нормализуем duration
     const tasksForRender = aoaTasks.map(t => ({
       ...t,
       duration: Number(t.duration ?? 0),
       isDummy: t.isDummy === true || Number(t.duration ?? 0) === 0
     }));
 
-    // 4) строим узлы и рёбра уже из преобразованных данных
     const nodes = createNodes(tasksForRender);
     const edges = createEdges(tasksForRender, nodes).map(e => ({
       ...e,
       isDummy: e.task?.isDummy === true
     }));
 
-    // 5) рисуем
     ctx.save();
     ctx.translate(offset.x, offset.y);
     ctx.scale(scale, scale);
@@ -143,6 +168,7 @@ const NetworkDiagram = ({ results }) => {
     for (let y = (offset.y % gridSize); y < height; y += gridSize) {
       ctx.beginPath();
       ctx.moveTo(0, y);
+      ctx.lineTo(0, y);
       ctx.lineTo(width, y);
       ctx.stroke();
     }
@@ -187,7 +213,6 @@ const NetworkDiagram = ({ results }) => {
 
     const nodes = Array.from(nodeMap.values());
 
-    // Определяем критичность узлов: узел критичен, если к нему примыкает критическое ребро (task)
     const incidentCritical = new Set();
     tasks.forEach(t => {
       if (t?.isCritical) {
@@ -200,7 +225,6 @@ const NetworkDiagram = ({ results }) => {
       n.isCritical = incidentCritical.has(n.id);
     });
 
-    // Расставляем координаты с улучшенным алгоритмом
     positionNodes(nodes, tasks);
     return nodes;
   };
@@ -248,8 +272,8 @@ const NetworkDiagram = ({ results }) => {
 
     const baseX = 120;
     const baseY = 150;
-    const levelSpacing = 300; // Увеличиваем расстояние между уровнями
-    const nodeSpacing = 160;  // Увеличиваем расстояние между узлами
+    const levelSpacing = 300;
+    const nodeSpacing = 160;  
 
     levelGroups.forEach((levelNodes, level) => {
       levelNodes.sort((a, b) => a.id - b.id);
@@ -261,7 +285,6 @@ const NetworkDiagram = ({ results }) => {
         node.x = baseX + level * levelSpacing;
         node.y = startY + index * nodeSpacing;
         
-        // Добавляем небольшое случайное смещение для избежания наложений
         if (levelNodes.length > 1) {
           node.y += (Math.random() - 0.5) * 30;
         }
@@ -282,7 +305,6 @@ const NetworkDiagram = ({ results }) => {
   };
 
   const optimizeNodePositions = (nodes, tasks, levelGroups) => {
-    // Улучшенный алгоритм оптимизации позиций
     levelGroups.forEach((levelNodes, level) => {
       if (levelNodes.length <= 1) return;
       
@@ -307,10 +329,9 @@ const NetworkDiagram = ({ results }) => {
         }
       });
       
-      // Предотвращаем наложения узлов
       levelNodes.sort((a, b) => a.y - b.y);
       for (let i = 1; i < levelNodes.length; i++) {
-        const minDistance = 120; // Минимальное расстояние между узлами
+        const minDistance = 120; 
         if (levelNodes[i].y - levelNodes[i-1].y < minDistance) {
           levelNodes[i].y = levelNodes[i-1].y + minDistance;
         }
@@ -372,20 +393,17 @@ const NetworkDiagram = ({ results }) => {
     ctx.textBaseline = 'middle';
     ctx.fillText(node.id.toString(), x, y);
 
-    // Улучшенное отображение времен с предотвращением наложений
     if (showTimes && (node.earlyTime !== undefined || node.lateTime !== undefined)) {
       ctx.font = '10px Arial';
       ctx.fillStyle = colors.text;
       
       if (node.earlyTime !== undefined) {
         ctx.textAlign = 'center';
-        // Размещаем текст выше узла с достаточным отступом
         ctx.fillText(`ES: ${node.earlyTime.toFixed(1)}`, x, y - radius - 20);
       }
       
       if (node.lateTime !== undefined) {
         ctx.textAlign = 'center';
-        // Размещаем текст ниже узла с достаточным отступом
         ctx.fillText(`LS: ${node.lateTime.toFixed(1)}`, x, y + radius + 25);
       }
     }
@@ -407,7 +425,6 @@ const NetworkDiagram = ({ results }) => {
     const endX   = toX   - Math.cos(angle) * radius;
     const endY   = toY   - Math.sin(angle) * radius;
 
-    // стиль линии (пунктир для фиктивных)
     const isCrit = edge.isCritical === true;
     const isDummy = edge.isDummy === true;
 
@@ -423,13 +440,11 @@ const NetworkDiagram = ({ results }) => {
       ctx.strokeStyle = isCrit ? colors.criticalEdge : colors.normalEdge;
     }
 
-    // линия
     ctx.beginPath();
     ctx.moveTo(startX, startY);
     ctx.lineTo(endX, endY);
     ctx.stroke();
 
-    // стрелка
     const arrowLength = 12;
     const arrowAngle = Math.PI / 6;
     ctx.beginPath();
@@ -445,7 +460,6 @@ const NetworkDiagram = ({ results }) => {
     );
     ctx.stroke();
 
-    // Улучшенные подписи на ребре с предотвращением наложений
     if (showLabels && edge.task) {
       const midX = (startX + endX) / 2;
       const midY = (startY + endY) / 2;
@@ -453,7 +467,6 @@ const NetworkDiagram = ({ results }) => {
       const lineAngle = Math.atan2(endY - startY, endX - startX);
       const isHorizontal = Math.abs(lineAngle) < Math.PI / 4 || Math.abs(lineAngle) > 3 * Math.PI / 4;
 
-      // Увеличиваем отступ для предотвращения наложений
       const offsetDistance = 30;
       const offsetX = isHorizontal ? 0 : Math.cos(lineAngle + Math.PI / 2) * offsetDistance;
       const offsetY = isHorizontal ? -offsetDistance : Math.sin(lineAngle + Math.PI / 2) * offsetDistance;
@@ -469,22 +482,19 @@ const NetworkDiagram = ({ results }) => {
       const durationWidth = ctx.measureText(durationText).width;
       const maxWidth = Math.max(nameWidth, durationWidth);
 
-      const padding = 8; // Увеличиваем отступы
-      const lineHeight = 14; // Увеличиваем высоту строки
+      const padding = 8;
+      const lineHeight = 14; 
       const bgHeight = lineHeight * 2 + padding * 2;
       const bgWidth = maxWidth + padding * 2;
 
-      // фон под текст с улучшенной видимостью
       ctx.setLineDash([]);
       ctx.globalAlpha = 0.95;
       ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
       ctx.fillRect(textX - bgWidth / 2, textY - bgHeight / 2, bgWidth, bgHeight);
 
-      ctx.strokeStyle = isCrit ? colors.criticalEdge : colors.normalEdge;
       ctx.lineWidth = 1;
       ctx.strokeRect(textX - bgWidth / 2, textY - bgHeight / 2, bgWidth, bgHeight);
 
-      // сам текст
       ctx.fillStyle = colors.text;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -509,15 +519,15 @@ const NetworkDiagram = ({ results }) => {
     ctx.textBaseline = 'top';
     
     const label = `Узел ${node.id}`;
-    // Размещаем подпись ниже времен с достаточным отступом
+    
     ctx.fillText(label, node.x, node.y + 50);
   };
 
   const drawLegend = (ctx, width, height) => {
-    const legendX = width - 220; // Увеличиваем ширину легенды
+    const legendX = width - 220;
     const legendY = 20;
     const legendWidth = 200;
-    const legendHeight = 140; // Увеличиваем высоту для размещения переноса строки
+    const legendHeight = 140; 
     
     ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
     ctx.fillRect(legendX, legendY, legendWidth, legendHeight);
@@ -559,7 +569,6 @@ const NetworkDiagram = ({ results }) => {
       ctx.font = '11px Arial';
       ctx.fillText(item.text, legendX + 30, y + 3);
       
-      // Добавляем вторую строку для фиктивной работы
       if (item.secondLine) {
         ctx.fillText(item.secondLine, legendX + 30, y + 15);
       }
@@ -594,8 +603,6 @@ const NetworkDiagram = ({ results }) => {
 
   const handleWheel = (e) => {
     e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setScale(prev => Math.max(0.1, Math.min(3, prev * delta)));
   };
 
   const resetView = () => {
@@ -615,7 +622,6 @@ const NetworkDiagram = ({ results }) => {
 
   return (
     <div className="space-y-4">
-      {/* Заголовок и управление */}
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -643,7 +649,6 @@ const NetworkDiagram = ({ results }) => {
         </div>
       </div>
 
-      {/* Настройки отображения */}
       <Card>
         <CardContent className="p-4">
           <div className="flex flex-wrap gap-4 items-center">
@@ -687,7 +692,6 @@ const NetworkDiagram = ({ results }) => {
         </CardContent>
       </Card>
 
-      {/* Информация о критическом пути */}
       {results && results.criticalPath && (
         <Alert>
           <Info className="h-4 w-4" />
@@ -699,7 +703,6 @@ const NetworkDiagram = ({ results }) => {
         </Alert>
       )}
 
-      {/* Canvas для сетевого графика */}
       <Card>
         <CardContent className="p-0">
           <canvas
@@ -714,7 +717,6 @@ const NetworkDiagram = ({ results }) => {
         </CardContent>
       </Card>
 
-      {/* Статистика */}
       {results && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card>
@@ -750,4 +752,3 @@ const NetworkDiagram = ({ results }) => {
 };
 
 export default NetworkDiagram;
-

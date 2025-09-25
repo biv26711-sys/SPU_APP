@@ -35,30 +35,33 @@ const themes = {
       ring: '#3b82f6',
     }
   },
-  dark: {
+     dark: {
     name: 'Темная',
     colors: {
-      background: '#0f172a',
-      foreground: '#f1f5f9',
-      card: '#1e293b',
-      cardForeground: '#f1f5f9',
-      popover: '#1e293b',
-      popoverForeground: '#f1f5f9',
-      primary: '#60a5fa',
-      primaryForeground: '#0f172a',
-      secondary: '#334155',
-      secondaryForeground: '#f1f5f9',
-      muted: '#334155',
-      mutedForeground: '#cbd5e1',
-      accent: '#475569',
-      accentForeground: '#f1f5f9',
-      destructive: '#ef4444',
-      destructiveForeground: '#f8fafc',
-      border: '#475569',
-      input: '#334155',
-      ring: '#60a5fa',
+      background: 'oklch(0.145 0 0)',
+      foreground: 'oklch(0.985 0 0)', // <-- Главный цвет текста теперь светлый
+      card: 'oklch(0.205 0 0)',
+      cardForeground: 'oklch(0.485 0 0)',
+      popover: 'oklch(0.205 0 0)',
+      popoverForeground: 'oklch(0.985 0 0)',
+      primary: 'oklch(0.922 0 0)',
+      primaryForeground: 'oklch(0.205 0 0)',
+      secondary: 'oklch(0.269 0 0)',
+      secondaryForeground: 'oklch(0.985 0 0)',
+      muted: 'oklch(0.269 0 0)',
+      mutedForeground: 'oklch(0.708 0 0)',
+      accent: 'oklch(0.269 0 0)',
+      accentForeground: 'oklch(0.985 0 0)',
+      destructive: 'oklch(0.704 0.191 22.216)',
+      border: 'oklch(1 0 0 / 10%)',
+      input: 'oklch(1 0 0 / 15%)',
+      ring: 'oklch(0.556 0 0)',
     }
   },
+
+
+
+
   blue: {
     name: 'Синяя',
     colors: {
@@ -171,16 +174,16 @@ export const ThemeProvider = ({ children }) => {
     const theme = themes[currentTheme];
     const root = document.documentElement;
     
-    // Применяем CSS переменные
+    
     Object.entries(theme.colors).forEach(([key, value]) => {
       const cssVar = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
       root.style.setProperty(cssVar, value);
     });
 
-    // Устанавливаем класс темы
+   
     root.className = `theme-${currentTheme}`;
     
-    // Дополнительные стили для лучшей видимости текста
+    
     if (currentTheme === 'dark') {
       root.style.setProperty('--text-primary', '#f1f5f9');
       root.style.setProperty('--text-secondary', '#cbd5e1');
@@ -193,6 +196,7 @@ export const ThemeProvider = ({ children }) => {
     
     localStorage.setItem('spu-theme', currentTheme);
   }, [currentTheme]);
+  
 
   const changeTheme = (themeName) => {
     if (themes[themeName]) {
@@ -215,4 +219,3 @@ export const ThemeProvider = ({ children }) => {
     </ThemeContext.Provider>
   );
 };
-

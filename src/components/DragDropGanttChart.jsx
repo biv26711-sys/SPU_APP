@@ -341,7 +341,7 @@ const DragDropGanttChart = ({ results, onUpdateTasks }) => {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {/* Панель инструментов */}
+          
           <div className="flex flex-wrap gap-2 mb-4 p-2 bg-gray-50 rounded-lg">
             <Button variant="outline" size="sm" onClick={handleZoomIn}>
               <ZoomIn className="h-4 w-4" />
@@ -369,7 +369,7 @@ const DragDropGanttChart = ({ results, onUpdateTasks }) => {
             </Button>
           </div>
 
-          {/* Статус */}
+         
           <div className="flex items-center gap-4 mb-4 text-sm">
             <span>Масштаб: {Math.round(scale * 100)}%</span>
             {selectedTask && (
@@ -384,7 +384,7 @@ const DragDropGanttChart = ({ results, onUpdateTasks }) => {
             )}
           </div>
 
-          {/* Холст */}
+         
           <div className="border rounded-lg overflow-auto">
             <canvas
               ref={canvasRef}
@@ -398,7 +398,7 @@ const DragDropGanttChart = ({ results, onUpdateTasks }) => {
             />
           </div>
 
-          {/* Инструкции */}
+         
           <div className="mt-4 p-3 bg-gray-50 rounded-lg">
             <h4 className="font-medium mb-2">Управление:</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
@@ -409,7 +409,7 @@ const DragDropGanttChart = ({ results, onUpdateTasks }) => {
             </div>
           </div>
 
-          {/* Информация о выбранной задаче */}
+          
           {selectedTask && (
             <Card className="mt-4">
               <CardHeader>
@@ -428,7 +428,7 @@ const DragDropGanttChart = ({ results, onUpdateTasks }) => {
             </Card>
           )}
 
-          {/* Диалог редактирования */}
+          
           {editingTask && (
             <Card className="mt-4 border-blue-200">
               <CardHeader>

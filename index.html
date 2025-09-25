@@ -72,7 +72,7 @@
     <script type="module" src="/src/main.jsx"></script>
     
     <script>
-      // Show root when loaded
+      
       document.addEventListener('DOMContentLoaded', function() {
         setTimeout(() => {
           const root = document.getElementById('root');
@@ -82,7 +82,7 @@
             root.classList.add('loaded');
           }
           
-          // Hide loading after a short delay to ensure smooth transition
+         
           setTimeout(() => {
             if (loading) {
               loading.style.display = 'none';

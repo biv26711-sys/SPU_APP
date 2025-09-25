@@ -130,7 +130,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
           style={{ paddingLeft: `${indent + 8}px` }}
           onClick={() => node.type === 'group' && toggleExpanded(node.id)}
         >
-          {/* Иконка развертывания */}
+          
           <div className="w-6 h-6 flex items-center justify-center">
             {hasChildren ? (
               isExpanded ? (
@@ -141,7 +141,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
             ) : null}
           </div>
 
-          {/* Иконка типа */}
+         
           <div className="w-6 h-6 flex items-center justify-center mr-2">
             {node.type === 'group' ? (
               isExpanded ? (
@@ -154,7 +154,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
             )}
           </div>
 
-          {/* Название */}
+          
           <div className="flex-1">
             <span className="font-medium">{node.name}</span>
             {node.type === 'task' && node.task.isCritical && (
@@ -164,7 +164,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
             )}
           </div>
 
-          {/* Информация */}
+         
           <div className="flex items-center gap-2 text-sm text-gray-500">
             {node.type === 'group' ? (
               <>
@@ -184,7 +184,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
             )}
           </div>
 
-          {/* Кнопки действий */}
+        
           <div className="flex items-center gap-1 ml-2">
             <Button
               variant="ghost"
@@ -220,7 +220,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
           </div>
         </div>
 
-        {/* Дочерние узлы */}
+        
         {hasChildren && isExpanded && (
           <div>
             {node.children.map(child => renderNode(child, depth + 1))}
@@ -395,7 +395,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {/* Панель инструментов */}
+          
           <div className="flex flex-wrap gap-2 mb-4 p-2 bg-gray-50 rounded-lg">
             <Button
               onClick={() => setShowNewNodeForm(true)}
@@ -414,7 +414,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
             </Button>
           </div>
 
-          {/* Дерево WBS */}
+         
           <div className="border rounded-lg bg-white max-h-96 overflow-y-auto">
             {wbsTree.length > 0 ? (
               wbsTree.map(node => renderNode(node))
@@ -425,7 +425,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
             )}
           </div>
 
-          {/* Форма добавления нового элемента */}
+          
           {showNewNodeForm && (
             <Card className="mt-4 border-blue-200">
               <CardHeader>
@@ -492,7 +492,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
             </Card>
           )}
 
-          {/* Форма редактирования */}
+        
           {editingNode && (
             <Card className="mt-4 border-green-200">
               <CardHeader>
@@ -586,7 +586,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
             </Card>
           )}
 
-          {/* Статистика */}
+          
           <div className="mt-4 p-3 bg-gray-50 rounded-lg">
             <h4 className="font-medium mb-2">Статистика структуры:</h4>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">

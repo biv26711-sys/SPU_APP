@@ -258,13 +258,13 @@ export class SPUCalculation {
   static validateNetwork(tasks) {
     const errors = [];
     
-    if (!Array.isArray(tasks) || tasks.length === 0) { // новое
+    if (!Array.isArray(tasks) || tasks.length === 0) { 
       errors.push("Список задач пуст");
       return { isValid: false, errors };
     }
 
     tasks.forEach(task => {
-      // тут много нового в этом блоке
+     
       if (!task.id || typeof task.id !== 'string' || !/^\d+-\d+$/.test(task.id.trim())) {
         errors.push(`Некорректный ID задачи: ${task.id}`);
       }
@@ -290,7 +290,7 @@ export class SPUCalculation {
       if (!Number.isFinite(perf) || perf <= 0) {
         errors.push(`Некорректное количество исполнителей для задачи: ${task.id}`);
       }
-      // до сюда новое
+      
     });
 
     try {
@@ -301,8 +301,8 @@ export class SPUCalculation {
           Number(task.duration),
           from,
           to,
-          task.laborIntensity, // новое
-          task.numberOfPerformers // новое
+          task.laborIntensity, 
+          task.numberOfPerformers 
         );
       });
       const calculation = new SPUCalculation(spuTasks);

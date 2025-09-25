@@ -250,7 +250,7 @@ const DragDropNetworkDiagram = ({ results, onUpdateTasks }) => {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {/* Панель инструментов */}
+          
           <div className="flex flex-wrap gap-2 mb-4 p-2 bg-gray-50 rounded-lg">
             <Button
               variant={mode === 'move' ? 'default' : 'outline'}
@@ -297,7 +297,7 @@ const DragDropNetworkDiagram = ({ results, onUpdateTasks }) => {
             </Button>
           </div>
 
-          {/* Статус */}
+          
           <div className="flex items-center gap-4 mb-4 text-sm">
             <span>Режим: <Badge variant="outline">{
               mode === 'move' ? 'Перемещение' :
@@ -312,7 +312,7 @@ const DragDropNetworkDiagram = ({ results, onUpdateTasks }) => {
             <span>Масштаб: {Math.round(scale * 100)}%</span>
           </div>
 
-          {/* Холст */}
+         
           <div className="border rounded-lg overflow-hidden">
             <canvas
               ref={canvasRef}
@@ -326,7 +326,7 @@ const DragDropNetworkDiagram = ({ results, onUpdateTasks }) => {
             />
           </div>
 
-          {/* Легенда */}
+         
           <div className="mt-4 p-3 bg-gray-50 rounded-lg">
             <h4 className="font-medium mb-2">Управление:</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
@@ -337,7 +337,7 @@ const DragDropNetworkDiagram = ({ results, onUpdateTasks }) => {
             </div>
           </div>
 
-          {/* Информация о выбранном узле */}
+          
           {selectedNode && (
             <Card className="mt-4">
               <CardHeader>

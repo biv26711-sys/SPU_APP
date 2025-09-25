@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onMenuClearAll:     (cb) => ipcRenderer.on('menu-clear-all', cb),
   onMenuShowHelp:     (cb) => ipcRenderer.on('menu-show-help', cb),
 
-  // новое для ввода примеров из меню
+  
   onMenuLoadExampleBasic:    (cb) => ipcRenderer.on('menu-load-example-basic', cb),
   onMenuLoadExampleRequired: (cb) => ipcRenderer.on('menu-load-example-required', cb),
 
@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
 });
 
-//новый блок
+
 contextBridge.exposeInMainWorld('api', {
   templates: {
     search:        (q)  => ipcRenderer.invoke('templates:search', q),

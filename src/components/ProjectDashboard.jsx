@@ -217,7 +217,7 @@ const ProjectDashboard = ({ results, project }) => {
         </Button>
       </div>
 
-      {/* Ключевые метрики */}
+     
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
@@ -321,9 +321,9 @@ const ProjectDashboard = ({ results, project }) => {
         </Card>
       )}
 
-      {/* Графики и диаграммы */}
+      
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Распределение работ */}
+      
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -354,7 +354,7 @@ const ProjectDashboard = ({ results, project }) => {
           </CardContent>
         </Card>
 
-        {/* Длительность работ */}
+        
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -384,7 +384,6 @@ const ProjectDashboard = ({ results, project }) => {
           </CardContent>
         </Card>
 
-        {/* Распределение ресурсов */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -405,7 +404,7 @@ const ProjectDashboard = ({ results, project }) => {
           </CardContent>
         </Card>
 
-        {/* Временная шкала */}
+       
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -442,7 +441,7 @@ const ProjectDashboard = ({ results, project }) => {
         </Card>
       </div>
 
-      {/* Прогресс выполнения */}
+     
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

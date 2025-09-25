@@ -34,16 +34,25 @@ const ThemeSettings = () => {
 
   const getThemeDescription = (themeName) => {
     switch (themeName) {
-      case 'light': return 'Классическая светлая тема для комфортной работы днем';
-      case 'dark': return 'Темная тема для работы в условиях низкой освещенности';
-      case 'blue': return 'Профессиональная синяя тема для деловой среды';
-      case 'green': return 'Успокаивающая зеленая тема для длительной работы';
-      case 'purple': return 'Креативная фиолетовая тема для вдохновения';
-      case 'orange': return 'Энергичная оранжевая тема для активной работы';
-      case 'modern': return 'Современная тема с чистым и минималистичным дизайном';
-      case 'vibrant': return 'Яркая и динамичная тема с насыщенными цветами';
-      default: return 'Стандартная тема оформления';
-    }
+  case 'light':
+    return 'Классическая светлая тема для комфортной\nработы днем';
+  case 'dark':
+    return 'Темная тема для работы в условиях низкой\nосвещенности';
+  case 'blue':
+    return 'Профессиональная синяя тема для\nделовой среды';
+  case 'green':
+    return 'Успокаивающая зеленая тема для\nдлительной работы';
+  case 'purple':
+    return 'Креативная фиолетовая тема для\nвдохновения';
+  case 'orange':
+    return 'Энергичная оранжевая тема для\nактивной работы';
+  case 'modern':
+    return 'Современная тема с чистым и\nминималистичным дизайном';
+  case 'vibrant':
+    return 'Яркая и динамичная тема с\nнасыщенными цветами';
+  default:
+    return 'Стандартная тема оформления\n '; 
+}
   };
 
   return (
@@ -93,11 +102,11 @@ const ThemeSettings = () => {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-sm mb-4" style={{ color: 'var(--muted-foreground)' }}>
+                  <p className="text-sm mb-4 whitespace-pre-wrap h-12" style={{ color: 'var(--muted-foreground)' }}>
                     {getThemeDescription(themeName)}
                   </p>
                   
-                  <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2 mt-4">
                     <div className="flex items-center gap-2">
                       <div 
                         className="w-4 h-4 rounded border"
@@ -189,49 +198,8 @@ const ThemeSettings = () => {
           </Alert>
         </CardContent>
       </Card>
-
-      {/* Дополнительные стили для улучшения видимости */}
-      <style jsx>{`
-        .theme-dark {
-          color-scheme: dark;
-        }
-        
-        .theme-dark * {
-          color: var(--foreground) !important;
-        }
-        
-        .theme-dark .text-gray-500,
-        .theme-dark .text-gray-600,
-        .theme-dark .text-muted-foreground {
-          color: var(--muted-foreground) !important;
-        }
-        
-        .theme-dark .bg-gray-50,
-        .theme-dark .bg-muted {
-          background-color: var(--muted) !important;
-        }
-        
-        .theme-dark .border-gray-200,
-        .theme-dark .border {
-          border-color: var(--border) !important;
-        }
-        
-        .theme-dark input,
-        .theme-dark select,
-        .theme-dark textarea {
-          background-color: var(--input) !important;
-          color: var(--foreground) !important;
-          border-color: var(--border) !important;
-        }
-        
-        .theme-dark .card {
-          background-color: var(--card) !important;
-          color: var(--card-foreground) !important;
-        }
-      `}</style>
     </div>
   );
 };
 
 export default ThemeSettings;
-

@@ -233,7 +233,7 @@ ${'='.repeat(80)}
 
   return (
     <div className="space-y-6">
-      {/* Заголовок */}
+    
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           {onBack && (
@@ -264,7 +264,7 @@ ${'='.repeat(80)}
         </div>
       </div>
 
-      {/* Статистика */}
+     
       {statistics && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card>
@@ -324,7 +324,7 @@ ${'='.repeat(80)}
         </TabsList>
 
         <TabsContent value="logs" className="space-y-4">
-          {/* Фильтры */}
+          
           <Card>
             <CardContent className="p-4">
               <div className="flex flex-wrap gap-4">
@@ -372,7 +372,7 @@ ${'='.repeat(80)}
             </CardContent>
           </Card>
 
-          {/* Список логов */}
+          
           <Card>
             <CardContent className="p-0">
               <div className="max-h-[600px] overflow-y-auto">
@@ -428,7 +428,7 @@ ${'='.repeat(80)}
 
         <TabsContent value="stats" className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Статистика по уровням */}
+           
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -451,7 +451,7 @@ ${'='.repeat(80)}
               </CardContent>
             </Card>
 
-            {/* Статистика по действиям */}
+            
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -472,7 +472,7 @@ ${'='.repeat(80)}
             </Card>
           </div>
 
-          {/* Информация о сессии */}
+         
           <Card>
             <CardHeader>
               <CardTitle>Информация о сессии</CardTitle>

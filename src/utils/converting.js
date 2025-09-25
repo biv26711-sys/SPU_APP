@@ -1,6 +1,5 @@
-
 export function looksLikeEdgeId(id) {
-  return typeof id === 'string' && /^\d+\-\d+$/.test(id.trim());
+  return typeof id === 'string' && /^\d+-\d+$/.test(id.trim());
 }
 
 function toNum(x) {
@@ -150,7 +149,7 @@ export function aonToAoa(aonTasks, { hoursPerDay = 6, createSink = true } = {}) 
 
       let candidates = [];
       if (curPhase != null) {
-        // Ищем только в предыдущей фазе, а не во всех предыдущих
+        
         const prevPhaseIndex = phasesSorted.indexOf(curPhase) - 1;
         if (prevPhaseIndex >= 0) {
           const prevPhase = phasesSorted[prevPhaseIndex];
@@ -158,7 +157,7 @@ export function aonToAoa(aonTasks, { hoursPerDay = 6, createSink = true } = {}) 
           const terminalAnchors = processedTasks
             .filter(x => x && x.phase === prevPhase && isTerminalInPhase(x.id));
 
-          // Если в предыдущей фазе нет терминальных задач, ищем в более ранних
+         
           if (terminalAnchors.length === 0) {
             for (let i = prevPhaseIndex - 1; i >= 0; i--) {
               const earlierPhase = phasesSorted[i];
@@ -175,7 +174,7 @@ export function aonToAoa(aonTasks, { hoursPerDay = 6, createSink = true } = {}) 
             .map(x => taskEvents.get(x.id)?.endEvent)
             .filter(e => Number.isFinite(e));
 
-          // Если нет терминальных задач в предыдущей фазе, ищем в более ранних
+         
           if (terminalAnchors.length === 0) {
             for (let i = prevPhaseIndex - 1; i >= 0; i--) {
               const earlierPhase = phasesSorted[i];
@@ -191,7 +190,6 @@ export function aonToAoa(aonTasks, { hoursPerDay = 6, createSink = true } = {}) 
             .map(x => taskEvents.get(x.id)?.endEvent)
             .filter(e => Number.isFinite(e));
 
-          // Если все еще нет кандидатов, берем любые из предыдущей фазы
           if (candidates.length === 0) {
             const anyAnchors = processedTasks.filter(x => x && x.phase === prevPhase);
             candidates = anyAnchors
@@ -279,3 +277,4 @@ export function aonToAoa(aonTasks, { hoursPerDay = 6, createSink = true } = {}) 
 
   return aoaEdges;
 }
+

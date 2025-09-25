@@ -71,7 +71,7 @@ const CalculationResults = ({ results, project }) => {
         task.lateFinish?.toFixed(2) || '',
         task.totalFloat?.toFixed(2) || '',
         task.freeFloat?.toFixed(2) || '',
-        (!task.isDummy && task.isCritical) ? 'Да' : 'Нет' // новое
+        (!task.isDummy && task.isCritical) ? 'Да' : 'Нет' 
       ].join(','))
     ].join('\n');
 
@@ -85,12 +85,12 @@ const CalculationResults = ({ results, project }) => {
     document.body.removeChild(link);
   };
 
-  const criticalTasks = results.tasks.filter(t => !t.isDummy && t.isCritical);  // новое
-  const nonCriticalTasks = results.tasks.filter(t => !t.isDummy && !t.isCritical); // новое
+  const criticalTasks = results.tasks.filter(t => !t.isDummy && t.isCritical);  
+  const nonCriticalTasks = results.tasks.filter(t => !t.isDummy && !t.isCritical);
 
   return (
     <div className="space-y-6">
-      {/* Сводная информация */}
+    
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
@@ -173,13 +173,13 @@ const CalculationResults = ({ results, project }) => {
       )}
 
       <Tabs defaultValue="table" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="table">Таблица 6.1.2</TabsTrigger>
           <TabsTrigger value="analysis">Анализ работ</TabsTrigger>
-          <TabsTrigger value="resources">Управление ресурсами</TabsTrigger>
+          
         </TabsList>
 
-        {/* Таблица 6.1.2 - Основные результаты */}
+       
         <TabsContent value="table">
           <Card>
             <CardHeader>
@@ -239,11 +239,11 @@ const CalculationResults = ({ results, project }) => {
                   </thead>
                   <tbody>
                     {results.tasks.map((task, index) => {
-                      const isCriticalVisual = !task.isDummy && task.isCritical; // новое (критичность только для НЕ фиктивных работ)
+                      const isCriticalVisual = !task.isDummy && task.isCritical; 
                       return (
                         <tr
                           key={task.id}
-                          className={`${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} ${isCriticalVisual ? 'bg-red-50' : ''} hover:bg-blue-50 cursor-pointer`} // новое
+                          className={`${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} ${isCriticalVisual ? 'bg-red-50' : ''} hover:bg-blue-50 cursor-pointer`} 
                           onClick={() => setSelectedTask(selectedTask === task.id ? null : task.id)}
                         >
                           <td className="border border-gray-300 px-3 py-2 font-medium">
@@ -311,7 +311,7 @@ const CalculationResults = ({ results, project }) => {
                           <p>Предшественники: {task.predecessors.length > 0 ? task.predecessors.join(', ') : 'нет'}</p>
                           <p>Резерв времени: {task.totalFloat > 0.001 ? `${task.totalFloat.toFixed(2)} дней` : 'отсутствует'}</p>
                           <p>Статус: 
-                            {(() => { // новое
+                            {(() => { 
                               const isCriticalVisual = !task.isDummy && task.isCritical;
                               return (
                                 <p>
@@ -340,10 +340,10 @@ const CalculationResults = ({ results, project }) => {
           </Card>
         </TabsContent>
 
-        {/* Анализ работ */}
+        
         <TabsContent value="analysis">
           <div className="space-y-4">
-            {/* Критические работы */}
+           
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -374,7 +374,7 @@ const CalculationResults = ({ results, project }) => {
               </CardContent>
             </Card>
 
-            {/* Некритические работы */}
+          
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -412,7 +412,7 @@ const CalculationResults = ({ results, project }) => {
           </div>
         </TabsContent>
 
-        {/* Управление ресурсами */}
+        
         <TabsContent value="resources">
           <ResourceManagement results={results} project={project} />
         </TabsContent>

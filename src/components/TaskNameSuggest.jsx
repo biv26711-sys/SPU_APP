@@ -1,4 +1,4 @@
-// src/components/TaskNameSuggest.jsx
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import StickyPhaseHeader from "@/components/StickyPhaseHeader.jsx";
 

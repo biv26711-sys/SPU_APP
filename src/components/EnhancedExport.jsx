@@ -58,13 +58,13 @@ const exportToWord = async () => {
 console.log("Критических работ:", tasks.filter(t => t.isCritical).length);
 console.log("Общая трудоемкость:", tasks.reduce((sum, t) => sum + (t.workload || 0), 0));
   try {
-    // Создаём документ
+    
     const doc = new Document({
       sections: [
         {
           properties: {},
           children: [
-            // Заголовок
+           
             new Paragraph({
               text: "Отчет по сетевому планированию и управлению",
               heading: HeadingLevel.TITLE,
@@ -76,7 +76,7 @@ console.log("Общая трудоемкость:", tasks.reduce((sum, t) => sum
             }),
             new Paragraph({ text: "" }),
 
-            // 1. Общая информация
+            
             new Paragraph({
               text: "1. Общая информация о проекте",
               heading: HeadingLevel.HEADING_1,
@@ -112,7 +112,7 @@ console.log("Общая трудоемкость:", tasks.reduce((sum, t) => sum
             
             new Paragraph({ text: "" }),
 
-            // 2. Критический путь
+            
             new Paragraph({
               text: "2. Критический путь",
               heading: HeadingLevel.HEADING_1,
@@ -122,7 +122,7 @@ console.log("Общая трудоемкость:", tasks.reduce((sum, t) => sum
             }),
             new Paragraph({ text: "" }),
 
-            // 3. Список задач
+            
             new Paragraph({
               text: "3. Список задач",
               heading: HeadingLevel.HEADING_1,
@@ -132,12 +132,12 @@ console.log("Общая трудоемкость:", tasks.reduce((sum, t) => sum
       ],
     });
 
-    // Таблица задач
+    
     if (tasks.length > 0) {
       const table = new DocxTable({
         width: { size: 100, type: WidthType.PERCENTAGE },
         rows: [
-          // Заголовок таблицы
+          
           new TableRow({
             children: ["ID", "Название", "Длительность", "Исполнители", "Критическая"].map(
               text => new TableCell({
@@ -145,7 +145,7 @@ console.log("Общая трудоемкость:", tasks.reduce((sum, t) => sum
               })
             ),
           }),
-          // Данные задач
+         
           ...tasks.map(task => new TableRow({
             children: [
               task.id,
@@ -165,8 +165,8 @@ console.log("Общая трудоемкость:", tasks.reduce((sum, t) => sum
       });
     }
 
-    // Генерация и скачивание документа в браузере
-    const blob = await Packer.toBlob(doc); // <- главное исправление
+   
+    const blob = await Packer.toBlob(doc); 
     saveAs(blob, `SPU_Project_Report_${new Date().toLocaleDateString('ru-RU')}.docx`);
     setExportStatus('Word документ успешно создан');
   } catch (error) {
@@ -273,10 +273,9 @@ console.log("Общая трудоемкость:", tasks.reduce((sum, t) => sum
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="documents" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="documents">Документы</TabsTrigger>
               <TabsTrigger value="tables">Таблицы</TabsTrigger>
-              <TabsTrigger value="formats">Форматы</TabsTrigger>
             </TabsList>
 
             <TabsContent value="documents" className="space-y-4">
@@ -373,39 +372,7 @@ console.log("Общая трудоемкость:", tasks.reduce((sum, t) => sum
               </div>
             </TabsContent>
 
-            <TabsContent value="formats" className="space-y-4">
-              <Alert>
-                <BarChart3 className="h-4 w-4" />
-                <AlertDescription>
-                  <strong>Поддерживаемые форматы:</strong>
-                  <ul className="mt-2 space-y-1">
-                    <li>• <strong>DOCX</strong> - Microsoft Word документ с полным отчетом</li>
-                    <li>• <strong>XML</strong> - Microsoft Project XML для импорта</li>
-                    <li>• <strong>CSV</strong> - Таблица данных для Excel</li>
-                    <li>• <strong>Таблица 6.1.2</strong> - Специальный учебный формат</li>
-                  </ul>
-                </AlertDescription>
-              </Alert>
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="text-center">
-                  <Badge variant="secondary" className="mb-2">Задач</Badge>
-                  <p className="text-2xl font-bold">{tasks.length}</p>
-                </div>
-                <div className="text-center">
-                  <Badge variant="secondary" className="mb-2">Критических</Badge>
-                  <p className="text-2xl font-bold">{tasks.filter(t => t.isCritical).length}</p>
-                </div>
-                <div className="text-center">
-                  <Badge variant="secondary" className="mb-2">Длительность</Badge>
-                  <p className="text-2xl font-bold">{results?.projectDuration || 0}</p>
-                </div>
-                <div className="text-center">
-                  <Badge variant="secondary" className="mb-2">Трудоемкость</Badge>
-                  <p className="text-2xl font-bold">{tasks.reduce((sum, t) => sum + (t.workload || 0), 0)}</p>
-                </div>
-              </div>
-            </TabsContent>
+            
           </Tabs>
 
           {exportStatus && (

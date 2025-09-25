@@ -1,7 +1,7 @@
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain } = require('electron');
 const path = require('path');
 const isDev = !app.isPackaged;
-// новое
+
 const { openDB, searchTemplates, getTemplate, getRequiredPredecessors, getAllRequiredTemplates } = require('./db/sqlite-readonly.cjs');
 
 
@@ -29,7 +29,7 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
-      preload: path.join(__dirname, 'preload.cjs') // тут теперь .cjs
+      preload: path.join(__dirname, 'preload.cjs') 
     },
     icon: path.join(__dirname, 'icon.png'),
     show: false, 
@@ -163,7 +163,7 @@ function createMenu() {
         mainWindow.webContents.send('menu-calculate');
       }
     },
-    // тут новый ввод: базовый пример старый и (условно) минимальный набор из бд
+    
     {
       label: 'Загрузить пример',
       submenu: [
@@ -181,7 +181,7 @@ function createMenu() {
         },
       ]
     },
-    // до сюда изменнеие ввода
+   
     {
       label: 'Очистить все',
       click: () => {
@@ -252,8 +252,7 @@ function createMenu() {
   Menu.setApplicationMenu(menu);
 }
 
-//новый блок вместо того, что снизу закомменчено
-//app.whenReady().then(createWindow);
+
 app.whenReady().then(() => {
   try {
     const dbPath = isDev
@@ -303,7 +302,7 @@ ipcMain.handle('get-app-path', (event, name) => {
   return app.getPath(name);
 });
 
-// новое: обработчики для SQLite
+
 ipcMain.handle('templates:search', (_e, q) => searchTemplates(q));
 ipcMain.handle('templates:get', (_e, id) => getTemplate(id));
 ipcMain.handle('templates:requiredFor', (_e, id) => getRequiredPredecessors(id));
