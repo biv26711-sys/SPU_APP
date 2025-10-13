@@ -1,23 +1,29 @@
-import { useState } from 'react';
+import { useState, useImperativeHandle, forwardRef } from 'react';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { HelpCircle } from 'lucide-react';
 
-const UserGuide = () => {
+
+const UserGuide = forwardRef((props, ref) => {
   const [open, setOpen] = useState(false);
+
+  useImperativeHandle(ref, () => ({
+    open: () => setOpen(true),
+    close: () => setOpen(false)
+  }));
+   if (!open) {
+    return null;
+  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-2">
-          <HelpCircle className="h-4 w-4" />
-          Руководство пользователя
-        </Button>
-      </DialogTrigger>
       <DialogContent className="user-guide-modal">
         <DialogHeader>
           <DialogTitle>Руководство пользователя - СПУ</DialogTitle>
+          <DialogDescription>
+    Краткое руководство по основным функциям приложения.
+  </DialogDescription>
+          
         </DialogHeader>
         <ScrollArea className="h-[70vh] pr-4">
           <div className="user-guide-content">
@@ -63,10 +69,11 @@ const UserGuide = () => {
             <p>
               Временная диаграмма проекта, показывающая последовательность и продолжительность работ 
               на временной шкале.
+            </p>
                <ul>
               <li>Используйте <code>Ctrl + колесо мыши</code> для масштабирования</li>
             </ul>
-            </p>
+            
 
             <h3>5. Календарь</h3>
             <p>
@@ -137,12 +144,13 @@ const UserGuide = () => {
               <li>При необходимости очистите проект и начните заново</li>
             </ul>
           </div>
-          
         </ScrollArea>
+        <DialogFooter>
+          <Button onClick={() => setOpen(false)}>Закрыть</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
-};
+});
 
 export default UserGuide;
-

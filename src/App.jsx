@@ -17,15 +17,16 @@ import {
   Trash2,
   Activity,
   Settings,
+  HelpCircle, 
   Users,
   Save
 } from 'lucide-react';
 
+import { exportToWord } from '@/utils/exportUtils';
 import TaskInput from './components/TaskInput';
 import CalculationResults from './components/CalculationResults';
 import NetworkDiagram from './components/NetworkDiagram';
 import GanttChart from './components/GanttChart';
-import ExportOnly from './components/ImportExport';
 import LogViewer from './components/LogViewer';
 import ProjectDashboard from './components/ProjectDashboard';
 import Calendar from './components/Calendar';
@@ -58,8 +59,14 @@ function App() {
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
   const [appZoom, setAppZoom] = useState(1);
   const networkDiagramRef = useRef(null);
+  const ganttChartRef = useRef(null);
+  const userGuideRef = useRef(null);
+  const [isExportingWord, setIsExportingWord] = useState(false);
 
   const { loadAutosavedData, clearAutosavedData, hasAutosavedData } = useAutosave(project, calculationResults);
+
+
+  
 
   useEffect(() => {
     logger.logSystemEvent('APP_MOUNTED', {
@@ -71,8 +78,78 @@ function App() {
       setShowRecoveryDialog(true);
     }
   }, []);
+  useEffect(() => {
+    const off = window.electronAPI?.onMenuSaveProject?.(() => {
+      handleSaveProject();
+    });
+ 
+    return () => {
+      window.electronAPI?.removeAllListeners?.('menu-save-project');
+    };
+  }, []); 
+
+  useEffect(() => {
+    const off = window.electronAPI?.onMenuExportWord?.(() => {
+      if (!isExportingWord && project.tasks.length > 0) {
+        handleExportToWord(); 
+      }
+    });
+
+    return () => {
+      window.electronAPI?.removeAllListeners?.('menu-export-word');
+    };
+  }, [isExportingWord, project.tasks]);
+
+   useEffect(() => {
+    const off = window.electronAPI?.onMenuCalculate?.(() => {
+    
+      if (project.tasks.length > 0 && !isCalculating) {
+        handleCalculate();
+      }
+    });
+  
+    return () => {
+      window.electronAPI?.removeAllListeners?.('menu-calculate');
+    };
+  }, [project.tasks, isCalculating]); 
+
+
+  useEffect(() => {
+    const offBasic = window.electronAPI?.onMenuLoadExampleBasic?.(() => {
+      handleLoadExample();
+    });
+    const offRequired = window.electronAPI?.onMenuLoadExampleRequired?.(() => {
+      handleLoadRequiredFromDB();
+    });
+    
+    return () => {
+      window.electronAPI?.removeAllListeners?.('menu-load-example-basic');
+      window.electronAPI?.removeAllListeners?.('menu-load-example-required');
+    };
+  }, []); 
+
+  useEffect(() => {
+    const off = window.electronAPI?.onMenuClearAll?.(() => {
+      handleClearAll();
+    });
+    return () => {
+      window.electronAPI?.removeAllListeners?.('menu-clear-all');
+    };
+  }, []);
 
   
+
+  const handleExportToWord = async () => {
+  setIsExportingWord(true);
+  const { success, error } = await exportToWord(project.tasks, calculationResults);
+  if (success) {
+    alert("Word-документ успешно экспортирован!");
+  } else if (error !== 'Сохранение отменено пользователем') {
+    alert(`Ошибка при экспорте в Word: ${error}`);
+  }
+  setIsExportingWord(false);
+};
+
   useEffect(() => {
     const off = window.electronAPI?.onMenuLoadExampleBasic?.(() => {
       handleLoadExample();
@@ -431,10 +508,10 @@ function App() {
 
  const handleLoadHelp = () => {
     console.log('handleLoadHelp called!');
+    
     if (userGuideRef.current) {
       console.log('userGuideRef.current exists, calling open()...');
       userGuideRef.current.open();
-     
     } else {
       console.error('userGuideRef.current is null. Is <UserGuide ref={...} /> rendered?');
     }
@@ -552,7 +629,7 @@ function App() {
       
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">
-            СПУ - Сетевое планирование и управление
+            Программа для сетевого планирования и управления
           </h1>
           <p className="text-lg text-gray-600 mb-4">
             Система для расчета параметров сетевого графика и построения диаграмм
@@ -568,6 +645,7 @@ function App() {
             )}
           </div>
         </div>
+       
 
         
         <Card className="mb-6">
@@ -604,8 +682,16 @@ function App() {
                 <Upload className="h-4 w-4 mr-2" />
                 Открыть проект
               </Button>
+              <Button onClick={handleExportToWord} variant="outline" disabled={isExportingWord || project.tasks.length === 0}>
+                <FileText className="h-4 w-4 mr-2" />
+                {isExportingWord ? 'Экспорт...' : 'Экспорт в Word'}
+              </Button>
 
-              <UserGuide />
+
+              <Button onClick={handleLoadHelp} variant="outline">
+              <HelpCircle className="h-4 w-4 mr-2" />
+               Руководство пользователя
+              </Button>
             </div>
 
            
@@ -692,44 +778,35 @@ function App() {
             )}
           </TabsContent>
 
-          <TabsContent value="network" className="space-y-4">
-            {calculationResults ? (
-              <div ref={networkDiagramRef}>
-                <NetworkDiagram results={calculationResults} />
-              </div>
-            ) : (
+         <TabsContent value="network" className="space-y-4">
+            {calculationResults ? ( <NetworkDiagram ref={networkDiagramRef} results={calculationResults} />) : (
               <Card>
-                <CardContent className="text-center py-8">
-                  <Network className="h-12 w-12 mx-auto text-gray-400 mb-4" />
-                  <p className="text-gray-500">
-                    Выполните расчет параметров для построения сетевого графика
-                  </p>
-                </CardContent>
-              </Card>
+              <CardContent className="text-center py-8">
+                <Network className="h-12 w-12 mx-auto text-gray-400 mb-4" />
+            <p className="text-gray-500">
+              Выполните расчет параметров для построения сетевого графика
+              </p>
+              </CardContent></Card>
             )}
           </TabsContent>
 
           <TabsContent value="gantt" className="space-y-4">
-            {calculationResults ? (
-              <GanttChart results={calculationResults} />
-            ) : (
+             {calculationResults ? ( <GanttChart ref={ganttChartRef} results={calculationResults} project={project} />) : (
               <Card>
                 <CardContent className="text-center py-8">
                   <BarChart3 className="h-12 w-12 mx-auto text-gray-400 mb-4" />
-                  <p className="text-gray-500">
-                    Выполните расчет параметров для построения диаграммы Ганта
-                  </p>
-                </CardContent>
-              </Card>
-            )}
+            <p className="text-gray-500">
+              Выполните расчет параметров для построения диаграммы Ганта
+            </p>
+            </CardContent></Card>)}
           </TabsContent>
 
           <TabsContent value="analysis" className="space-y-4">
             <Tabs defaultValue="dashboard" className="space-y-4">
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="dashboard">Дашборд</TabsTrigger>
                 <TabsTrigger value="resources">Ресурсы</TabsTrigger>
-                <TabsTrigger value="what-if">Что-если</TabsTrigger>
+        
               </TabsList>
               
               <TabsContent value="dashboard">
@@ -790,16 +867,14 @@ function App() {
               </TabsList>
               
               <TabsContent value="export">
-                <ExportOnly 
-                  project={project}
-                  calculationResults={calculationResults}
-                  networkDiagramRef={networkDiagramRef}
-                />
+               
                 <EnhancedExport 
-                  results={calculationResults}
-                  project={project}
-                  tasks={project.tasks}
-                />
+                    results={calculationResults}
+                    project={project}
+                    tasks={project.tasks}
+                    ganttChartRef={ganttChartRef}
+                    networkDiagramRef={networkDiagramRef}
+                  />
               </TabsContent>
               
               <TabsContent value="themes">
@@ -824,6 +899,13 @@ function App() {
           </TabsContent>
         </Tabs>
       </div>
+       <UserGuide ref={userGuideRef} />
+       {calculationResults && (
+    <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', zIndex: -1 }}>
+      <NetworkDiagram ref={networkDiagramRef} results={calculationResults} />
+      <GanttChart ref={ganttChartRef} results={calculationResults} project={project} />
+    </div>
+  )}
     </div>
   );
 }

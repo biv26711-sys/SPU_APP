@@ -1,5 +1,6 @@
-const { app, BrowserWindow, Menu } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog } = require("electron"); 
 const path = require("path");
+const fs = require("fs").promises; 
 const isDev = require("electron-is-dev");
 
 if (!isDev) {
@@ -19,7 +20,7 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "preload.js"), 
       experimentalFeatures: false,
       webSecurity: true,
       allowRunningInsecureContent: false,
@@ -28,7 +29,7 @@ function createWindow() {
   });
 
   if (isDev) {
-    win.loadURL('http://localhost:5173');
+    win.loadURL('http://localhost:5173' );
     win.webContents.openDevTools();
   } else {
    win.loadURL(`file://${path.join(__dirname, '../dist/index.html')}`);
@@ -36,7 +37,6 @@ function createWindow() {
 
   win.once('ready-to-show', () => {
     win.show();
-    
     if (isDev) {
       win.focus();
     }
@@ -52,6 +52,24 @@ function createWindow() {
 
   return win;
 }
+
+ipcMain.handle("show-save-dialog", async (event, options) => {
+  const focusedWindow = BrowserWindow.getFocusedWindow();
+  if (!focusedWindow) return null; 
+  const { canceled, filePath } = await dialog.showSaveDialog(focusedWindow, options);
+  return canceled ? null : filePath;
+});
+
+ipcMain.handle("write-file", async (event, filePath, data) => {
+  try {
+    await fs.writeFile(filePath, data);
+    return true;
+  } catch (error) {
+    console.error('Failed to write file:', error);
+    return false;
+  }
+});
+
 
 app.whenReady().then(() => {
   createWindow();

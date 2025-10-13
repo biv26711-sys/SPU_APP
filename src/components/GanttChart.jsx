@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -22,7 +22,7 @@ import {
 import { format, addDays, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-const GanttChart = ({ results, project }) => {
+const GanttChart = forwardRef(({ results, project }, ref) => {
   const [showCriticalPath, setShowCriticalPath] = useState(true);
   const [showTimeScale, setShowTimeScale] = useState(true);
   const [showResources, setShowResources] = useState(true);
@@ -35,6 +35,9 @@ const GanttChart = ({ results, project }) => {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const animationFrameRef = useRef(null);
+  useImperativeHandle(ref, () => ({
+  getCanvas: () => canvasRef.current,
+}));
 
   const tasks = results?.tasks || [];
   const projectDuration = results?.projectDuration || 0;
@@ -736,5 +739,5 @@ const GanttChart = ({ results, project }) => {
       </Card>
     </div>
   );
-};
+});
 export default GanttChart;

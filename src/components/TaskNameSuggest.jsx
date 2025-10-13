@@ -1,8 +1,7 @@
-
 import { useEffect, useMemo, useRef, useState } from 'react';
 import StickyPhaseHeader from "@/components/StickyPhaseHeader.jsx";
 
-export default function TaskNameSuggest({ value, onSelect }) {
+export default function TaskNameSuggest({ value, onSelect, onChange }) { 
   const [q, setQ] = useState(value || '');
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
@@ -51,8 +50,16 @@ export default function TaskNameSuggest({ value, onSelect }) {
         className="w-full h-10 rounded-md border px-3 text-sm"
         placeholder="Начните печатать..."
         value={q}
-        onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+        onChange={(e) => { 
+          const v = e.target.value; 
+          setQ(v); 
+          setOpen(true); 
+          onChange?.(v); 
+        }}
         onFocus={() => setOpen(true)}
+        onKeyDown={(e) => { 
+          if (e.key === 'Escape') setOpen(false); 
+        }}
       />
 
       {open && (
@@ -78,9 +85,13 @@ export default function TaskNameSuggest({ value, onSelect }) {
                     onClick={async () => {
                       try {
                         const required = await window.api?.templates?.requiredFor?.(row.id) ?? [];
+                        setQ(row.name); 
+                        onChange?.(row.name); 
                         onSelect?.({ template: row, required });
                       } catch (e) {
                         console.warn('failed to load required deps', e);
+                        setQ(row.name);
+                        onChange?.(row.name); 
                         onSelect?.({ template: row, required: [] });
                       } finally {
                         setOpen(false);
@@ -98,5 +109,3 @@ export default function TaskNameSuggest({ value, onSelect }) {
     </div>
   );
 }
-
-

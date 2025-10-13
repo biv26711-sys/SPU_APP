@@ -8,8 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Calendar as CalendarIcon, Clock, Plus, Edit, Trash2, AlertTriangle, CheckCircle, Search, Filter, X, PartyPopper } from 'lucide-react';
-import { format, addDays, parseISO, isWeekend, differenceInDays, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, getDay } from 'date-fns';
+import { Calendar as CalendarIcon, Clock, Plus, CheckCircle, PartyPopper, Trash2, AlertTriangle } from 'lucide-react';
+import { format, addDays, parseISO, differenceInDays, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, getDay, startOfDay } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
 const BASE_HOLIDAYS = [
@@ -45,7 +45,7 @@ const generateHolidaysForYears = (baseHolidays, startYear = 2020, endYear = 2030
     baseHolidays.forEach((holiday, index) => {
       holidays.push({
         id: `${year}-${index}`,
-        date: `${year}-${holiday.date}`,
+        date: `${year}-${holiday.date}`, 
         name: holiday.name,
         type: holiday.type
       });
@@ -55,21 +55,11 @@ const generateHolidaysForYears = (baseHolidays, startYear = 2020, endYear = 2030
 };
 
 const Calendar = ({ project, results, onProjectUpdate }) => {
-  const [projectStartDate, setProjectStartDate] = useState(
-    project?.startDate || new Date().toISOString().split('T')[0]
-  );
+  const [projectStartDate, setProjectStartDate] = useState(project?.startDate || new Date().toISOString().split('T')[0]);
   const [workingDays, setWorkingDays] = useState({
-    monday: true,
-    tuesday: true,
-    wednesday: true,
-    thursday: true,
-    friday: true,
-    saturday: false,
-    sunday: false
+    monday: true, tuesday: true, wednesday: true, thursday: true, friday: true, saturday: false, sunday: false
   });
-  const [holidays, setHolidays] = useState(() => {
-    return generateHolidaysForYears(BASE_HOLIDAYS);
-  });
+  const [holidays, setHolidays] = useState(() => generateHolidaysForYears(BASE_HOLIDAYS));
   const [newHoliday, setNewHoliday] = useState('');
   const [holidayName, setHolidayName] = useState('');
   const [holidayType, setHolidayType] = useState('custom');
@@ -80,121 +70,142 @@ const Calendar = ({ project, results, onProjectUpdate }) => {
   const [holidayFilter, setHolidayFilter] = useState('all');
   const [holidaySearch, setHolidaySearch] = useState('');
 
-  useEffect(() => {
-    if (results && results.tasks && projectStartDate) {
-      calculateTaskSchedule();
-    }
-  }, [results, projectStartDate, workingDays, holidays]);
+  const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
 
-  const isWorkingDay = (date) => {
-    const dayOfWeek = date.getDay();
-    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-    
-    if (!workingDays[dayNames[dayOfWeek]]) {
-      return false;
-    }
-    
-    const dateString = date.toISOString().split('T')[0];
+  const formatDate = d => format(d instanceof Date ? d : parseISO(d), 'yyyy-MM-dd');
+
+  const isWorkingDay = date => {
+    const d = date instanceof Date ? startOfDay(date) : startOfDay(parseISO(date));
+    const dow = d.getDay();
+    if (!workingDays[dayNames[dow]]) return false; 
+    const dateString = formatDate(d);
     return !holidays.some(holiday => holiday.date === dateString);
   };
 
-  const isWeekendDay = (date) => {
-    const dayOfWeek = date.getDay();
-    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-    return !workingDays[dayNames[dayOfWeek]];
+  const addWorkingDays = (startDate, daysToAdd) => {
+    let current = startOfDay(startDate instanceof Date ? startDate : parseISO(startDate));
+    while (!isWorkingDay(current)) current = addDays(current, 1); 
+    if (!daysToAdd || daysToAdd <= 0) return current;
+
+    let added = 0;
+    while (added < daysToAdd) {
+      current = addDays(current, 1);
+      if (isWorkingDay(current)) added++;
+    }
+    return current;
   };
 
-  const addWorkingDays = (startDate, daysToAdd) => {
-    let currentDate = new Date(startDate);
-    let addedDays = 0;
-    
-    while (addedDays < daysToAdd) {
-      currentDate = addDays(currentDate, 1);
-      if (isWorkingDay(currentDate)) {
-        addedDays++;
-      }
-    }
-    
-    return currentDate;
-  };
+  useEffect(() => {
+    if (results?.tasks && projectStartDate) calculateTaskSchedule();
+
+  }, [results, projectStartDate, workingDays, holidays]);
 
   const calculateTaskSchedule = () => {
-    if (!results || !results.tasks || !projectStartDate) return;
-
-    const startDate = new Date(projectStartDate);
+    if (!results?.tasks || !projectStartDate) return;
+    const startDate = startOfDay(parseISO(projectStartDate));
     const schedule = [];
-    
+
     results.tasks.forEach(task => {
       const taskStartDate = addWorkingDays(startDate, task.earlyStart || 0);
-      const taskEndDate = addWorkingDays(taskStartDate, task.duration - 1);
-      
-      const lateStartDate = addWorkingDays(startDate, task.lateStart || task.earlyStart || 0);
-      const lateEndDate = addWorkingDays(lateStartDate, task.duration - 1);
-      
+      const taskEndDate = addWorkingDays(taskStartDate, (task.duration || 1) - 1);
+
+      const lateStartDate = addWorkingDays(startDate, task.lateStart ?? task.earlyStart ?? 0);
+      const lateEndDate = addWorkingDays(lateStartDate, (task.duration || 1) - 1);
+
       schedule.push({
         ...task,
         startDate: taskStartDate,
         endDate: taskEndDate,
-        lateStartDate: lateStartDate,
-        lateEndDate: lateEndDate,
+        lateStartDate,
+        lateEndDate,
         calendarDuration: differenceInDays(taskEndDate, taskStartDate) + 1,
         workingDays: task.duration
       });
     });
 
     setTaskSchedule(schedule);
-    
+
     if (onProjectUpdate) {
       onProjectUpdate({
         ...project,
         startDate: projectStartDate,
-        schedule: schedule,
-        workingDays: workingDays,
-        holidays: holidays
+        schedule,
+        workingDays,
+        holidays
       });
     }
   };
 
+  const getDayInfo = day => {
+    const dateString = formatDate(day);
+    const holiday = holidays.find(h => h.date === dateString);
+    const milestone = milestones.find(m => m.date === dateString);
+    const tasksOnDay = taskSchedule.filter(task => {
+      const s = formatDate(task.startDate);
+      const e = formatDate(task.endDate);
+      return dateString >= s && dateString <= e && isWorkingDay(day); 
+    });
+
+    return {
+      isHoliday: !!holiday,
+      holidayName: holiday?.name,
+      holidayType: holiday?.type,
+      milestone,
+      tasks: tasksOnDay,
+      isWeekend: !workingDays[dayNames[day.getDay()]] && !holiday
+    };
+  };
+
+  const navigateMonth = direction => {
+    const newDate = new Date(currentCalendarDate);
+    newDate.setMonth(newDate.getMonth() + direction);
+    setCurrentCalendarDate(newDate);
+  };
+
+  const getDaysInMonth = date => eachDayOfInterval({ start: startOfMonth(date), end: endOfMonth(date) });
+
+
   const addHoliday = () => {
     if (!newHoliday || !holidayName) return;
-    
-    const newHolidayDate = new Date(newHoliday);
+
+    const newHolidayDate = parseISO(newHoliday);
     const monthDay = format(newHolidayDate, 'MM-dd');
     const newHolidays = [];
-    
+
     for (let year = 2020; year <= 2030; year++) {
       newHolidays.push({
-        id: `custom-${year}-${Date.now()}`,
-        date: `${year}-${monthDay}`,
+        id: `custom-${year}-${Date.now()}-${year}`,
+        date: `${year}-${monthDay}`, 
         name: holidayName,
         type: holidayType
       });
     }
-    
-    setHolidays([...holidays, ...newHolidays]);
+
+    setHolidays(prev => [...prev, ...newHolidays]);
     setNewHoliday('');
     setHolidayName('');
     setHolidayType('custom');
   };
 
   const removeHoliday = (holidayToRemove) => {
-    const holidayDate = new Date(holidayToRemove.date);
-    const monthDay = format(holidayDate, 'MM-dd');
-    setHolidays(holidays.filter(h => {
-      const hDate = new Date(h.date);
-      const hMonthDay = format(hDate, 'MM-dd');
-      return hMonthDay !== monthDay || h.name !== holidayToRemove.name;
-    }));
+    
+    const monthDay = holidayToRemove.date.slice(5); 
+    setHolidays(prev =>
+      prev.filter(h => {
+        
+        return h.date.slice(5) !== monthDay || h.name !== holidayToRemove.name;
+      })
+    );
   };
 
   const addMilestone = () => {
     if (!newMilestone.name || !newMilestone.date) return;
-    
+
     const milestone = {
       id: Date.now(),
       ...newMilestone
     };
-    
+
     setMilestones([...milestones, milestone]);
     setNewMilestone({ name: '', date: '', description: '' });
   };
@@ -211,10 +222,10 @@ const Calendar = ({ project, results, onProjectUpdate }) => {
   };
 
   const getTaskStatus = (task) => {
-    const today = new Date();
-    const startDate = new Date(task.startDate);
-    const endDate = new Date(task.endDate);
-    
+    const today = startOfDay(new Date());
+    const startDate = startOfDay(task.startDate);
+    const endDate = startOfDay(task.endDate);
+
     if (today < startDate) {
       return { status: 'planned', label: 'Запланирована', color: 'blue' };
     } else if (today >= startDate && today <= endDate) {
@@ -249,7 +260,7 @@ const Calendar = ({ project, results, onProjectUpdate }) => {
 
     const dataStr = JSON.stringify(calendarData, null, 2);
     const dataBlob = new Blob([dataStr], { type: 'application/json' });
-    
+
     const link = document.createElement('a');
     link.href = URL.createObjectURL(dataBlob);
     link.download = `calendar_${format(new Date(), 'yyyy-MM-dd')}.json`;
@@ -258,35 +269,7 @@ const Calendar = ({ project, results, onProjectUpdate }) => {
     document.body.removeChild(link);
   };
 
-  const getDaysInMonth = (date) => {
-    const start = startOfMonth(date);
-    const end = endOfMonth(date);
-    return eachDayOfInterval({ start, end });
-  };
-
-  const getDayInfo = (day) => {
-    const dateString = format(day, 'yyyy-MM-dd');
-    const holiday = holidays.find(h => h.date === dateString);
-    const milestone = milestones.find(m => m.date === dateString);
-    const tasksOnDay = taskSchedule.filter(task => 
-      day >= task.startDate && day <= task.endDate
-    );
-    
-    return {
-      isHoliday: !!holiday,
-      holidayName: holiday?.name,
-      holidayType: holiday?.type,
-      milestone,
-      tasks: tasksOnDay,
-      isWeekend: isWeekendDay(day) && !holiday
-    };
-  };
-
-  const navigateMonth = (direction) => {
-    const newDate = new Date(currentCalendarDate);
-    newDate.setMonth(newDate.getMonth() + direction);
-    setCurrentCalendarDate(newDate);
-  };
+ 
 
   const getHolidayTypeColor = (type) => {
     switch (type) {
@@ -377,7 +360,8 @@ const Calendar = ({ project, results, onProjectUpdate }) => {
               <p className="text-sm text-muted-foreground">Дата окончания</p>
               <p className="font-medium">
                 {results?.projectDuration && projectStartDate ? 
-                  format(addWorkingDays(parseISO(projectStartDate), results.projectDuration), 'dd MMMM yyyy', { locale: ru }) :
+                 
+                  format(addWorkingDays(parseISO(projectStartDate), Math.max(0, Math.round(results.projectDuration) - 1)), 'dd MMMM yyyy', { locale: ru }) :
                   'Не рассчитано'
                 }
               </p>
@@ -437,8 +421,8 @@ const Calendar = ({ project, results, onProjectUpdate }) => {
             </Alert>
           )}
 
-          <Card className="bg-gradient-to-br from-blue-50 to-indigo-100 border-0 shadow-lg">
-            <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-t-lg">
+          <Card className="bg-gradient-to-br  from-blue-50 to-indigo-100 border-0 shadow-lg">
+            <CardHeader className="py-2  bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-t-lg">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-2xl font-bold">
                   {format(currentCalendarDate, 'LLLL yyyy', { locale: ru })}
@@ -505,74 +489,94 @@ const Calendar = ({ project, results, onProjectUpdate }) => {
                 ))}
               </div>
               
-              <div className="grid grid-cols-7 gap-2">
-                {getDaysInMonth(currentCalendarDate).map(day => {
-                  const dayInfo = getDayInfo(day);
-                  const isToday = isSameDay(day, new Date());
+             <div className="grid grid-cols-7 gap-2">
+                {(() => {
                   
+                  const start = startOfMonth(currentCalendarDate);
+                  
+                  const startWeekday = (getDay(start) + 6) % 7;
+                  const days = getDaysInMonth(currentCalendarDate);
+
                   return (
-                    <div
-                      key={day.toISOString()}
-                      className={`
-                        min-h-[120px] p-3 rounded-xl border-2 relative transition-all duration-200 hover:shadow-lg hover:scale-105
-                        ${isToday ? 'ring-4 ring-blue-400 border-blue-400 bg-blue-100' : ''}
-                        ${dayInfo.isHoliday ? 'bg-red-100 border-red-300' : 
-                          dayInfo.isWeekend ? 'bg-gray-100 border-gray-300' : 
-                          'bg-blue-50 border-blue-200'}
-                        shadow-sm
-                      `}
-                    >
-                      <div className={`text-lg font-bold mb-2 ${
-                        isToday ? 'text-blue-700' : 
-                        dayInfo.isHoliday ? 'text-red-700' : 
-                        dayInfo.isWeekend ? 'text-gray-600' : 'text-blue-700'
-                      }`}>
-                        {format(day, 'd')}
-                      </div>
+                    <>
                       
-                      {dayInfo.isHoliday && (
-                        <div className="mb-2 flex items-center gap-1">
-                          <PartyPopper className="h-3 w-3 text-red-600" />
-                          <div className="text-xs font-medium leading-tight break-words overflow-hidden text-red-800">
-                            {dayInfo.holidayName}
+                      {Array.from({ length: startWeekday }).map((_, i) => (
+                        <div key={'empty-' + i} />
+                      ))}
+
+                     
+                      {days.map(day => {
+                        const dayInfo = getDayInfo(day);
+                        const isToday = isSameDay(day, new Date());
+
+                        return (
+                          <div
+                            key={day.toISOString()}
+                            className={`
+                              min-h-[120px] p-3 rounded-xl border-2 relative transition-all duration-200 hover:shadow-lg hover:scale-105
+                              ${isToday ? 'ring-4 ring-blue-400 border-blue-400 bg-blue-100' : ''}
+                              ${dayInfo.isHoliday ? 'bg-red-100 border-red-300' : 
+                                dayInfo.isWeekend ? 'bg-gray-100 border-gray-300' : 
+                                'bg-blue-50 border-blue-200'}
+                              shadow-sm
+                            `}
+                          >
+                            <div className={`text-lg font-bold mb-2 ${
+                              isToday ? 'text-blue-700' : 
+                              dayInfo.isHoliday ? 'text-red-700' : 
+                              dayInfo.isWeekend ? 'text-gray-600' : 'text-blue-700'
+                            }`}>
+                              {format(day, 'd')}
+                            </div>
+
+                            {dayInfo.isHoliday && (
+                              <div className="mb-2 flex items-center gap-1">
+                                <PartyPopper className="h-3 w-3 text-red-600" />
+                                <div className="text-xs font-medium leading-tight break-words overflow-hidden text-red-800">
+                                  {dayInfo.holidayName}
+                                </div>
+                              </div>
+                            )}
+
+                            {dayInfo.milestone && (
+                              <div className="mb-2">
+                                <Badge variant="outline" className="text-xs bg-yellow-100 border-yellow-300 text-yellow-800">
+                                  {dayInfo.milestone.name}
+                                </Badge>
+                              </div>
+                            )}
+
+                            {dayInfo.tasks.length > 0 && (
+                              <div className="space-y-1">
+                                {dayInfo.tasks.slice(0, 2).map(task => (
+                                  <div
+                                    key={task.id}
+                                    className={`text-xs p-1 rounded text-white font-medium leading-tight break-words ${
+                                      task.isCritical ? 'bg-red-500' : 'bg-orange-500'
+                                    }`}
+                                  >
+                                    {task.name || task.id}
+                                  </div>
+                                ))}
+                                {dayInfo.tasks.length > 2 && (
+                                  <div className="text-xs text-gray-500 font-medium">
+                                    +{dayInfo.tasks.length - 2} ещё
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      )}
-                      
-                      {dayInfo.milestone && (
-                        <div className="mb-2">
-                          <Badge variant="outline" className="text-xs bg-yellow-100 border-yellow-300 text-yellow-800">
-                            {dayInfo.milestone.name}
-                          </Badge>
-                        </div>
-                      )}
-                      
-                      {dayInfo.tasks.length > 0 && (
-                        <div className="space-y-1">
-                          {dayInfo.tasks.slice(0, 2).map(task => (
-                            <div
-                              key={task.id}
-                              className={`text-xs p-1 rounded text-white font-medium leading-tight break-words ${
-                                task.isCritical ? 'bg-red-500' : 'bg-orange-500'
-                              }`}
-                            >
-                              {task.name || task.id}
-                            </div>
-                          ))}
-                          {dayInfo.tasks.length > 2 && (
-                            <div className="text-xs text-gray-500 font-medium">
-                              +{dayInfo.tasks.length - 2} ещё
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                        );
+                      })}
+                    </>
                   );
-                })}
+                })()}
               </div>
             </CardContent>
           </Card>
         </TabsContent>
+
+       
 
         <TabsContent value="settings" className="space-y-4">
           <OverviewCards />

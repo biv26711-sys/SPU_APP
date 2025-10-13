@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs'); 
 const isDev = !app.isPackaged;
 
 const { openDB, searchTemplates, getTemplate, getRequiredPredecessors, getAllRequiredTemplates } = require('./db/sqlite-readonly.cjs');
@@ -39,7 +40,7 @@ function createWindow() {
 
   const startUrl = isDev 
     ? 'http://localhost:5173' 
-    : `file://${path.join(__dirname, '../dist/index.html')}`;
+    : `file://${path.join(__dirname, 'index.html' )}`;
   
   mainWindow.loadURL(startUrl);
 
@@ -76,8 +77,16 @@ function createMenu() {
         {
           label: 'Новый проект',
           accelerator: 'CmdOrCtrl+N',
-          click: () => {
-            mainWindow.webContents.send('menu-new-project');
+          click: async () => {
+            const response = await dialog.showMessageBox(mainWindow, {
+              type: 'question',
+              buttons: ['Да', 'Нет'],
+              title: 'Подтверждение',
+              message: 'Вы уверены, что хотите создать новый проект? Все несохраненные данные будут потеряны.'
+            });
+            if (response.response === 0) { 
+              mainWindow.webContents.send('menu-new-project');
+            }
           }
         },
         {
@@ -87,7 +96,8 @@ function createMenu() {
             const result = await dialog.showOpenDialog(mainWindow, {
               properties: ['openFile'],
               filters: [
-                { name: 'JSON файлы', extensions: ['json'] },
+                { name: 'SPU Project Files', extensions: ['spu'] },
+                { name: 'JSON Files', extensions: ['json'] },
                 { name: 'Все файлы', extensions: ['*'] }
               ]
             });
@@ -104,22 +114,16 @@ function createMenu() {
             mainWindow.webContents.send('menu-save-project');
           }
         },
-        { type: 'separator' },
         {
-          label: 'Экспорт в CSV',
+          label: 'Экспорт в Word',
           click: () => {
-            mainWindow.webContents.send('menu-export-csv');
+            mainWindow.webContents.send('menu-export-word');
           }
         },
-        {
-          label: 'Экспорт в Excel',
-          click: () => {
-            mainWindow.webContents.send('menu-export-excel');
-          }
-        },
+       
         { type: 'separator' },
         {
-          label: process.platform === 'darwin' ? 'Выход из СПУ' : 'Выход',
+          label: process.platform === 'darwin' ? 'Выход из программы' : 'Выход',
           accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
           click: () => {
             app.quit();
@@ -130,66 +134,74 @@ function createMenu() {
     {
       label: 'Правка',
       submenu: [
-        { role: 'undo', label: 'Отменить' },
-        { role: 'redo', label: 'Повторить' },
+        { label: 'Отменить', accelerator: 'CmdOrCtrl+Z', click: () => mainWindow.webContents.undo() },
+        { label: 'Повторить', accelerator: 'CmdOrCtrl+Y', click: () => mainWindow.webContents.redo() },
         { type: 'separator' },
-        { role: 'cut', label: 'Вырезать' },
-        { role: 'copy', label: 'Копировать' },
-        { role: 'paste', label: 'Вставить' },
-        { role: 'selectall', label: 'Выделить все' }
+        { label: 'Вырезать', accelerator: 'CmdOrCtrl+X', click: () => mainWindow.webContents.cut() },
+        { label: 'Копировать', accelerator: 'CmdOrCtrl+C', click: () => mainWindow.webContents.copy() },
+        { label: 'Вставить', accelerator: 'CmdOrCtrl+V', click: () => mainWindow.webContents.paste() },
+        { label: 'Выделить все', accelerator: 'CmdOrCtrl+A', click: () => mainWindow.webContents.selectAll() }
       ]
     },
     {
       label: 'Вид',
       submenu: [
-        { role: 'reload', label: 'Перезагрузить' },
-        { role: 'forceReload', label: 'Принудительная перезагрузка' },
-        { role: 'toggleDevTools', label: 'Инструменты разработчика' },
+        { label: 'Перезагрузить', accelerator: 'CmdOrCtrl+R', click: () => mainWindow.webContents.reload() },
+        { label: 'Принудительная перезагрузка', accelerator: 'CmdOrCtrl+Shift+R', click: () => mainWindow.webContents.reloadIgnoringCache() },
+        { label: 'Инструменты разработчика', accelerator: 'CmdOrCtrl+Shift+I', click: () => mainWindow.webContents.toggleDevTools() },
         { type: 'separator' },
-        { role: 'resetZoom', label: 'Сбросить масштаб' },
-        { role: 'zoomIn', label: 'Увеличить' },
-        { role: 'zoomOut', label: 'Уменьшить' },
+        { label: 'Сбросить масштаб', accelerator: 'CmdOrCtrl+0', click: () => mainWindow.webContents.setZoomFactor(1) },
+        { label: 'Увеличить', accelerator: 'CmdOrCtrl+Plus', click: () => mainWindow.webContents.setZoomFactor(mainWindow.webContents.getZoomFactor() + 0.1) },
+        { label: 'Уменьшить', accelerator: 'CmdOrCtrl+-', click: () => mainWindow.webContents.setZoomFactor(mainWindow.webContents.getZoomFactor() - 0.1) },
         { type: 'separator' },
-        { role: 'togglefullscreen', label: 'Полноэкранный режим' }
+        { label: 'Полноэкранный режим', accelerator: 'F11', click: () => mainWindow.setFullScreen(!mainWindow.isFullScreen()) }
       ]
     },
     {
-  label: 'Расчеты',
-  submenu: [
-    {
-      label: 'Рассчитать параметры',
-      accelerator: 'F5',
-      click: () => {
-        mainWindow.webContents.send('menu-calculate');
-      }
-    },
-    
-    {
-      label: 'Загрузить пример',
+      label: 'Расчеты',
       submenu: [
         {
-          label: 'Базовый пример (старый)',
+          label: 'Рассчитать параметры',
+          accelerator: 'F5',
           click: () => {
-            mainWindow.webContents.send('menu-load-example-basic');
+            mainWindow.webContents.send('menu-calculate');
           }
         },
+        
         {
-          label: 'Все обязательные из БД',
-          click: () => {
-            mainWindow.webContents.send('menu-load-example-required');
-          }
+          label: 'Загрузить пример',
+          submenu: [
+            {
+              label: 'Базовый пример (старый)',
+              click: () => {
+                mainWindow.webContents.send('menu-load-example-basic');
+              }
+            },
+            {
+              label: 'Все обязательные из БД',
+              click: () => {
+                mainWindow.webContents.send('menu-load-example-required');
+              }
+            },
+          ]
         },
+       
+        {
+          label: 'Очистить все',
+          click: async () => {
+            const response = await dialog.showMessageBox(mainWindow, {
+              type: 'question',
+              buttons: ['Да', 'Нет'],
+              title: 'Подтверждение',
+              message: 'Вы уверены, что хотите очистить все данные? Это действие необратимо.'
+            });
+            if (response.response === 0) {
+              mainWindow.webContents.send('menu-clear-all');
+            }
+          }
+        }
       ]
     },
-   
-    {
-      label: 'Очистить все',
-      click: () => {
-        mainWindow.webContents.send('menu-clear-all');
-      }
-    }
-  ]
-},
     {
       label: 'Окно',
       submenu: [
@@ -200,24 +212,31 @@ function createMenu() {
     {
       label: 'Справка',
       submenu: [
+     
+        {
+          label: 'Руководство пользователя',
+          accelerator: 'F1',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.webContents.send('menu-show-help');
+            }
+          }
+        },
+        { type: 'separator' }, 
+   
         {
           label: 'О программе',
           click: () => {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
-              title: 'О программе СПУ',
-              message: 'СПУ - Сетевое планирование и управление',
+              title: 'О программе',
+              message: 'Программа для сетевого планирования и управления',
               detail: 'Версия 1.0.0\n\nСистема для расчета параметров сетевого графика и построения диаграмм.\n\nРазработано для студентов ИДБ.',
               buttons: ['OK']
             });
           }
         },
-        {
-          label: 'Руководство пользователя',
-          click: () => {
-            mainWindow.webContents.send('menu-show-help');
-          }
-        }
+        
       ]
     }
   ];
@@ -227,15 +246,15 @@ function createMenu() {
     template.unshift({
       label: app.getName(),
       submenu: [
-        { role: 'about', label: 'О программе СПУ' },
+        { role: 'about', label: 'О программе' },
         { type: 'separator' },
         { role: 'services', label: 'Службы', submenu: [] },
         { type: 'separator' },
-        { role: 'hide', label: 'Скрыть СПУ' },
+        { role: 'hide', label: 'Скрыть программу' },
         { role: 'hideothers', label: 'Скрыть остальные' },
         { role: 'unhide', label: 'Показать все' },
         { type: 'separator' },
-        { role: 'quit', label: 'Выйти из СПУ' }
+        { role: 'quit', label: 'Выйти из программы' }
       ]
     });
 
@@ -255,21 +274,22 @@ function createMenu() {
 
 app.whenReady().then(() => {
   try {
-    const dbPath = isDev
-      ? path.join(process.cwd(), 'db', 'db2_final.db')
-      : path.join(process.resourcesPath, 'db', 'db2_final.db');
+ 
+    const dbPath = app.isPackaged
+   
+       ? path.join(process.resourcesPath, 'db', 'db2_final.db') 
+      : path.join(__dirname, '..', 'db', 'db2_final.db'); 
+
+    if (!fs.existsSync(dbPath)) {
+      throw new Error(`Файл базы данных не найден по пути: ${dbPath}`);
+    }
+
     openDB(dbPath);
     console.log('DB opened:', dbPath);
   } catch (e) {
     console.warn('Не удалось открыть БД:', e.message);
   }
   createWindow();
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
 });
 
 app.on('activate', () => {
@@ -303,6 +323,28 @@ ipcMain.handle('get-app-path', (event, name) => {
 });
 
 
+ipcMain.handle('save-file', async (event, filePath, data) => {
+  try {
+    fs.writeFileSync(filePath, data, 'utf8');
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to save file:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+
+ipcMain.handle('read-file', async (event, filePath) => {
+  try {
+    const data = fs.readFileSync(filePath, 'utf8');
+    return { success: true, data };
+  } catch (error) {
+    console.error('Failed to read file:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+
 ipcMain.handle('templates:search', (_e, q) => searchTemplates(q));
 ipcMain.handle('templates:get', (_e, id) => getTemplate(id));
 ipcMain.handle('templates:requiredFor', (_e, id) => getRequiredPredecessors(id));
@@ -324,4 +366,3 @@ if (!gotTheLock) {
     }
   });
 }
-

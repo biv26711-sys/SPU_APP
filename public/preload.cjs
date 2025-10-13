@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   
   onMenuLoadExampleBasic:    (cb) => ipcRenderer.on('menu-load-example-basic', cb),
+  onMenuExportWord:   (cb) => ipcRenderer.on('menu-export-word', cb),
   onMenuLoadExampleRequired: (cb) => ipcRenderer.on('menu-load-example-required', cb),
 
 
@@ -37,6 +38,9 @@ contextBridge.exposeInMainWorld('api', {
     requiredFor:   (id) => ipcRenderer.invoke('templates:requiredFor', id),
     getAllRequired:      ()  => ipcRenderer.invoke('templates:getAllRequired'),
   },
+  showSaveDialog: async (options) => ipcRenderer.invoke('show-save-dialog', options),
+  writeFile: async (filePath, data) => ipcRenderer.invoke('write-file', filePath, data),
 });
+
 
 console.log('Preload script loaded successfully');

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, forwardRef, useImperativeHandle } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -18,8 +18,9 @@ import {
   Palette
 } from 'lucide-react';
 
-const NetworkDiagram = ({ results }) => {
+const NetworkDiagram = forwardRef(({ results }, ref) => {
   const canvasRef = useRef(null);
+  
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -28,6 +29,9 @@ const NetworkDiagram = ({ results }) => {
   const [showTimes, setShowTimes] = useState(true);
   const [colorScheme, setColorScheme] = useState('modern');
   const [selectedNode, setSelectedNode] = useState(null);
+  useImperativeHandle(ref, () => ({
+  exportToPNG: exportDiagram
+}));
 
   const colorSchemes = {
     modern: {
@@ -510,18 +514,17 @@ const NetworkDiagram = ({ results }) => {
     ctx.restore();
   };
 
-  const drawNodeLabel = (ctx, node) => {
-    if (!showLabels) return;
-    
-    ctx.font = '12px Arial';
-    ctx.fillStyle = colors.text;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    
-    const label = `Узел ${node.id}`;
-    
-    ctx.fillText(label, node.x, node.y + 50);
-  };
+const drawNodeLabel = (ctx, node) => {
+  if (!showLabels) return;
+
+  ctx.font = '12px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = colors.text;
+
+  const label = ``;
+  ctx.fillText(label, node.x, node.y - 40);
+};
 
   const drawLegend = (ctx, width, height) => {
     const legendX = width - 220;
@@ -611,14 +614,61 @@ const NetworkDiagram = ({ results }) => {
   };
 
   const exportDiagram = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  if (!results || !results.tasks || results.tasks.length === 0) {
+    console.error("Нет данных для экспорта.");
+    return;
+  }
 
-    const link = document.createElement('a');
-    link.download = `network_diagram_${new Date().toISOString().split('T')[0]}.png`;
-    link.href = canvas.toDataURL();
-    link.click();
-  };
+  const offscreenCanvas = document.createElement('canvas');
+  const ctx = offscreenCanvas.getContext('2d');
+
+
+  const sourceTasks = Array.isArray(results.tasks) ? results.tasks : [];
+  const needsAdapt = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)));
+  const aoaTasks = needsAdapt ? converting(sourceTasks) : sourceTasks;
+  const nodes = createNodes(aoaTasks); 
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  nodes.forEach(node => {
+    minX = Math.min(minX, node.x);
+    maxX = Math.max(maxX, node.x);
+    minY = Math.min(minY, node.y);
+    maxY = Math.max(maxY, node.y);
+  });
+
+  const padding = 150;
+  const fullWidth = (maxX - minX) + padding * 2;
+  const fullHeight = (maxY - minY) + padding * 2;
+
+
+  const exportScale = 2; 
+  offscreenCanvas.width = fullWidth * exportScale;
+  offscreenCanvas.height = fullHeight * exportScale;
+  ctx.scale(exportScale, exportScale);
+
+
+  ctx.fillStyle = colors.background; 
+  ctx.fillRect(0, 0, fullWidth, fullHeight);
+
+  ctx.save();
+  ctx.translate(-minX + padding, -minY + padding);
+
+  const edges = createEdges(aoaTasks, nodes);
+  edges.forEach(edge => drawEdge(ctx, edge)); 
+  nodes.forEach(node => drawNode(ctx, node));
+  if (showLabels) {
+    nodes.forEach(node => drawNodeLabel(ctx, node)); 
+  }
+  
+  ctx.restore();
+
+  drawLegend(ctx, fullWidth, fullHeight);
+
+  const link = document.createElement('a');
+  link.download = `network_diagram_${new Date().toISOString().split('T')[0]}.png`;
+  link.href = offscreenCanvas.toDataURL('image/png', 1.0); 
+  link.click();
+};
 
   return (
     <div className="space-y-4">
@@ -749,6 +799,6 @@ const NetworkDiagram = ({ results }) => {
       )}
     </div>
   );
-};
+});
 
 export default NetworkDiagram;

@@ -6,14 +6,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Trash2, Plus, Edit } from 'lucide-react';
 import { createTask } from '../types/index.js';
-import TaskNameSuggest from './TaskNameSuggest'; 
+import TaskNameSuggest from './TaskNameSuggest';
 
-const HOURS_PER_DAY = 6; 
+const HOURS_PER_DAY = 6;
 
 function computeDurationDays(laborHours, performers, hoursPerDay = HOURS_PER_DAY) {
   const perf = Math.max(1, parseInt(performers) || 1);
   const hours = Math.max(0, parseFloat(laborHours) || 0);
-  return Math.max(1, Math.ceil(hours / (hoursPerDay * perf)));
+  const d = hours / (hoursPerDay * perf);
+  return Math.max(0.1, Math.ceil(d * 10) / 10); 
 }
 
 const TaskInput = ({ tasks, onTasksChange }) => {
@@ -22,13 +23,14 @@ const TaskInput = ({ tasks, onTasksChange }) => {
     name: '',
     duration: '',
     laborIntensity: '',
-    numberOfPerformers: '1', 
+    numberOfPerformers: '1',
     predecessors: ''
   });
   const [editingTask, setEditingTask] = useState(null);
-  const [missingReq, setMissingReq] = useState([]); 
 
- 
+  const [missingReq, setMissingReq] = useState([]); 
+  const [formError, setFormError] = useState(''); 
+
   const handleInputChange = (field, value) => {
     setFormData(prev => {
       const next = { ...prev, [field]: value };
@@ -37,35 +39,46 @@ const TaskInput = ({ tasks, onTasksChange }) => {
         const laborHours = parseFloat(next.laborIntensity) || 0;
         next.duration = String(computeDurationDays(laborHours, value));
       }
-
       if (field === 'laborIntensity') {
         const laborHours = parseFloat(value) || 0;
         next.duration = String(computeDurationDays(laborHours, next.numberOfPerformers));
       }
-
       return next;
     });
+
+    if (field === 'id' || field === 'name') setMissingReq([]); 
+    setFormError(''); 
+  };
+
+  const handleNameText = (text) => { 
+    setFormData(f => ({ ...f, name: text })); 
+    setMissingReq([]); 
+    setFormError(''); 
   };
 
   const handleSubmit = (e) => {
     e.preventDefault();
 
-    if (!formData.id || !formData.name || !formData.duration || !formData.numberOfPerformers) {
-     
-      setMissingReq([{ name: 'Пожалуйста, заполните все обязательные поля' }]);
+    if (
+      !String(formData.id).trim() || 
+      !String(formData.name).trim() || 
+      !String(formData.duration).trim() || 
+      !String(formData.numberOfPerformers).trim() 
+    ) {
+      setFormError('Пожалуйста, заполните все обязательные поля'); 
       return;
     }
 
     const predecessors = formData.predecessors
       .split(',')
       .map(p => p.trim())
-      .filter(p => p.length > 0);
+      .filter(Boolean);
 
     const newTask = createTask(
       formData.id,
       formData.name,
       parseFloat(formData.duration),
-      parseFloat(formData.laborIntensity) || parseFloat(formData.duration),
+      (formData.laborIntensity !== '' ? parseFloat(formData.laborIntensity) : null),
       parseInt(formData.numberOfPerformers),
       predecessors
     );
@@ -78,7 +91,7 @@ const TaskInput = ({ tasks, onTasksChange }) => {
       setEditingTask(null);
     } else {
       if (tasks.some(task => task.id === formData.id)) {
-        setMissingReq([{ name: 'Работа с таким ID уже существует' }]);
+        setFormError('Работа с таким ID уже существует');
         return;
       }
       onTasksChange([...tasks, newTask]);
@@ -93,19 +106,21 @@ const TaskInput = ({ tasks, onTasksChange }) => {
       predecessors: ''
     });
     setMissingReq([]);
+    setFormError(''); 
   };
 
   const handleEdit = (task) => {
     setFormData({
       id: task.id,
       name: task.name,
-      duration: task.duration.toString(),
-      laborIntensity: task.laborIntensity.toString(),
-      numberOfPerformers: task.numberOfPerformers.toString(),
+      duration: String(task.duration),
+      laborIntensity: String(task.laborIntensity ?? ''),
+      numberOfPerformers: String(task.numberOfPerformers),
       predecessors: task.predecessors.join(', ')
     });
     setEditingTask(task);
-    setMissingReq([]); //
+    setMissingReq([]);
+    setFormError(''); 
   };
 
   const handleDelete = (taskId) => {
@@ -122,15 +137,16 @@ const TaskInput = ({ tasks, onTasksChange }) => {
       name: '',
       duration: '',
       laborIntensity: '',
-      numberOfPerformers: '1', //
+      numberOfPerformers: '1',
       predecessors: ''
     });
-    setMissingReq([]); //
+    setMissingReq([]);
+    setFormError(''); 
   };
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-     
+
       <Card>
         <CardHeader>
           <CardTitle>Список работ ({tasks.length})</CardTitle>
@@ -177,7 +193,7 @@ const TaskInput = ({ tasks, onTasksChange }) => {
         </CardContent>
       </Card>
 
-     
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -200,16 +216,18 @@ const TaskInput = ({ tasks, onTasksChange }) => {
 
             <div className="space-y-2">
               <Label htmlFor="name">Название *</Label>
-             
               <TaskNameSuggest
                 value={formData.name}
+                
+                onChange={handleNameText} 
+                onInputChange={handleNameText} 
+                onTextChange={handleNameText} 
+
                 onSelect={({ template, required }) => {
-                  // 
                   const laborHours = typeof template?.base_duration_minutes === 'number'
-                    ? Math.ceil(template.base_duration_minutes / 60)
+                    ? Math.ceil((template.base_duration_minutes / 60) * 10) / 10
                     : null;
 
-                  //
                   const durationDays = laborHours != null
                     ? String(computeDurationDays(laborHours, formData.numberOfPerformers))
                     : formData.duration;
@@ -222,12 +240,25 @@ const TaskInput = ({ tasks, onTasksChange }) => {
                     duration: durationDays,
                   }));
 
-                  setMissingReq(required || []);
+                  const norm = Array.isArray(required) 
+                    ? required 
+                        .map(x => (x && typeof x === 'object') ? x : { code: String(x) }) 
+                        .filter(x => x.id != null || x.code || x.name) 
+                    : [];
+                  setMissingReq(norm); 
+                  setFormError(''); 
                 }}
               />
             </div>
 
-           
+    
+            {formError && ( 
+              <div className="rounded-md border border-red-300 bg-red-50 p-2 text-sm">
+                {formError}
+              </div>
+            )}
+
+            {/* обязательные предшественники из шаблона */}
             {missingReq.length > 0 && (
               <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-sm">
                 <div>
@@ -241,8 +272,10 @@ const TaskInput = ({ tasks, onTasksChange }) => {
                     variant="secondary"
                     size="sm"
                     onClick={() => {
-                      
-                      const list = missingReq.map(x => String(x.id));
+                      const list = missingReq
+                        .map(x => x?.id ?? x?.code ?? x?.name) 
+                        .filter(Boolean) 
+                        .map(String); 
                       setFormData(f => ({ ...f, predecessors: list.join(', ') }));
                     }}
                   >

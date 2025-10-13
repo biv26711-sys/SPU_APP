@@ -17,6 +17,14 @@ import {
 } from 'lucide-react';
 import ResourceManagement from './ResourceManagement';
 
+const formatNumberForCSV = (num) => {
+  const number = Number(num);
+  if (Number.isFinite(number)) {
+    return number.toFixed(2).replace('.', ',');
+  }
+  return '0,00';
+};
+
 const CalculationResults = ({ results, project }) => {
   const [selectedTask, setSelectedTask] = useState(null);
 
@@ -42,7 +50,7 @@ const CalculationResults = ({ results, project }) => {
   const exportToCSV = () => {
     const headers = [
       'ID работы',
-      'Название',
+      'Наименование работы',
       'Продолжительность (дни)',
       'Трудоемкость (н-ч)',
       'Количество исполнителей',
@@ -57,25 +65,28 @@ const CalculationResults = ({ results, project }) => {
     ];
 
     const csvContent = [
-      headers.join(','),
-      ...results.tasks.map(task => [
-        task.id,
-        `"${task.name}"`,
-        task.duration,
-        task.laborIntensity,
-        task.numberOfPerformers,
-        `"${task.predecessors.join(', ')}"`,
-        task.earlyStart?.toFixed(2) || '',
-        task.earlyFinish?.toFixed(2) || '',
-        task.lateStart?.toFixed(2) || '',
-        task.lateFinish?.toFixed(2) || '',
-        task.totalFloat?.toFixed(2) || '',
-        task.freeFloat?.toFixed(2) || '',
-        (!task.isDummy && task.isCritical) ? 'Да' : 'Нет' 
-      ].join(','))
+      headers.join(';'),
+      ...results.tasks.map(task => {
+        const taskIdAsFormula = `="${task.id}"`;
+        return [
+          taskIdAsFormula,
+          `"${task.name}"`,
+          task.duration,
+          task.laborIntensity || 0,
+          task.numberOfPerformers,
+          `"${(task.predecessors || []).join(', ')}"`,
+          formatNumberForCSV(task.earlyStart),
+          formatNumberForCSV(task.earlyFinish),
+          formatNumberForCSV(task.lateStart),
+          formatNumberForCSV(task.lateFinish),
+          formatNumberForCSV(task.totalFloat),
+          formatNumberForCSV(task.freeFloat),
+          (!task.isDummy && task.isCritical) ? 'Да' : 'Нет'
+        ].join(';');
+      })
     ].join('\n');
 
-    const dataBlob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8' });
+    const dataBlob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
     
     const link = document.createElement('a');
     link.href = URL.createObjectURL(dataBlob);
@@ -143,7 +154,6 @@ const CalculationResults = ({ results, project }) => {
         </Card>
       </div>
 
-      {/* Критический путь */}
       {results.criticalPath && results.criticalPath.length > 0 && (
         <Card>
           <CardHeader>
@@ -422,4 +432,3 @@ const CalculationResults = ({ results, project }) => {
 };
 
 export default CalculationResults;
-
