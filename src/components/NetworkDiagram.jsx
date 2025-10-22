@@ -29,9 +29,7 @@ const NetworkDiagram = forwardRef(({ results }, ref) => {
   const [showTimes, setShowTimes] = useState(true);
   const [colorScheme, setColorScheme] = useState('modern');
   const [selectedNode, setSelectedNode] = useState(null);
-  useImperativeHandle(ref, () => ({
-  exportToPNG: exportDiagram
-}));
+ 
 
   const colorSchemes = {
     modern: {
@@ -67,6 +65,100 @@ const NetworkDiagram = forwardRef(({ results }, ref) => {
   };
 
   const colors = colorSchemes[colorScheme];
+
+const drawFullDiagramOnContext = (ctx, width, height, nodes, edges, bgColor) => {
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, width, height);
+
+    const minX = Math.min(...nodes.map(n => n.x));
+    const minY = Math.min(...nodes.map(n => n.y));
+    const padding = 150;
+
+    ctx.save();
+    ctx.translate(-minX + padding, -minY + padding);
+
+    edges.forEach(edge => drawEdge(ctx, edge));
+    nodes.forEach(node => drawNode(ctx, node));
+    if (showLabels) {
+        nodes.forEach(node => drawNodeLabel(ctx, node));
+    }
+    
+    ctx.restore();
+};
+
+const exportDiagram = () => {
+    if (!results || !results.tasks || !results.tasks.length === 0) return;
+
+    const offscreenCanvas = document.createElement('canvas');
+    const ctx = offscreenCanvas.getContext('2d');
+
+    const sourceTasks = Array.isArray(results.tasks) ? results.tasks : [];
+    const aoaTasks = sourceTasks.some(t => !looksLikeEdgeId(String(t.id))) ? converting(sourceTasks) : sourceTasks;
+    const nodes = createNodes(aoaTasks);
+    const edges = createEdges(aoaTasks, nodes);
+
+    const minX = Math.min(...nodes.map(n => n.x));
+    const maxX = Math.max(...nodes.map(n => n.x));
+    const minY = Math.min(...nodes.map(n => n.y));
+    const maxY = Math.max(...nodes.map(n => n.y));
+
+    const padding = 150;
+    const fullWidth = (maxX - minX) + padding * 2;
+    const fullHeight = (maxY - minY) + padding * 2;
+    
+    const exportScale = 1.5;
+    offscreenCanvas.width = fullWidth * exportScale;
+    offscreenCanvas.height = fullHeight * exportScale;
+    ctx.scale(exportScale, exportScale);
+
+
+    drawFullDiagramOnContext(ctx, fullWidth, fullHeight, nodes, edges, colors.background);
+
+    const link = document.createElement('a');
+    link.download = `network_diagram_${new Date().toISOString().split('T')[0]}.png`;
+    link.href = offscreenCanvas.toDataURL('image/png', 1.0);
+    link.click();
+};
+
+
+useImperativeHandle(ref, () => ({
+  exportToPNG: exportDiagram,
+  getAsBase64: () => {
+    if (!results || !results.tasks || !results.tasks.length === 0) return null;
+
+    try {
+        const offscreenCanvas = document.createElement('canvas');
+        const ctx = offscreenCanvas.getContext('2d');
+
+        const sourceTasks = Array.isArray(results.tasks) ? results.tasks : [];
+        const aoaTasks = sourceTasks.some(t => !looksLikeEdgeId(String(t.id))) ? converting(sourceTasks) : sourceTasks;
+        const nodes = createNodes(aoaTasks);
+        const edges = createEdges(aoaTasks, nodes);
+
+        const minX = Math.min(...nodes.map(n => n.x));
+        const maxX = Math.max(...nodes.map(n => n.x));
+        const minY = Math.min(...nodes.map(n => n.y));
+        const maxY = Math.max(...nodes.map(n => n.y));
+
+        const padding = 150;
+        const fullWidth = (maxX - minX) + padding * 2;
+        const fullHeight = (maxY - minY) + padding * 2;
+        const exportScale = 2; 
+        offscreenCanvas.width = fullWidth * exportScale;
+        offscreenCanvas.height = fullHeight * exportScale;
+        ctx.scale(exportScale, exportScale);
+
+        drawFullDiagramOnContext(ctx, fullWidth, fullHeight, nodes, edges, '#FFFFFF');
+
+        return offscreenCanvas.toDataURL('image/png', 1.0);
+
+    } catch (e) {
+        console.error("Ошибка при получении base64 из сетевого графика:", e);
+        return null;
+    }
+  }
+}));
+
 
   useEffect(() => {
     if (results && results.tasks) {
@@ -613,62 +705,7 @@ const drawNodeLabel = (ctx, node) => {
     setOffset({ x: 0, y: 0 });
   };
 
-  const exportDiagram = () => {
-  if (!results || !results.tasks || results.tasks.length === 0) {
-    console.error("Нет данных для экспорта.");
-    return;
-  }
-
-  const offscreenCanvas = document.createElement('canvas');
-  const ctx = offscreenCanvas.getContext('2d');
-
-
-  const sourceTasks = Array.isArray(results.tasks) ? results.tasks : [];
-  const needsAdapt = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)));
-  const aoaTasks = needsAdapt ? converting(sourceTasks) : sourceTasks;
-  const nodes = createNodes(aoaTasks); 
-
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  nodes.forEach(node => {
-    minX = Math.min(minX, node.x);
-    maxX = Math.max(maxX, node.x);
-    minY = Math.min(minY, node.y);
-    maxY = Math.max(maxY, node.y);
-  });
-
-  const padding = 150;
-  const fullWidth = (maxX - minX) + padding * 2;
-  const fullHeight = (maxY - minY) + padding * 2;
-
-
-  const exportScale = 2; 
-  offscreenCanvas.width = fullWidth * exportScale;
-  offscreenCanvas.height = fullHeight * exportScale;
-  ctx.scale(exportScale, exportScale);
-
-
-  ctx.fillStyle = colors.background; 
-  ctx.fillRect(0, 0, fullWidth, fullHeight);
-
-  ctx.save();
-  ctx.translate(-minX + padding, -minY + padding);
-
-  const edges = createEdges(aoaTasks, nodes);
-  edges.forEach(edge => drawEdge(ctx, edge)); 
-  nodes.forEach(node => drawNode(ctx, node));
-  if (showLabels) {
-    nodes.forEach(node => drawNodeLabel(ctx, node)); 
-  }
   
-  ctx.restore();
-
-  drawLegend(ctx, fullWidth, fullHeight);
-
-  const link = document.createElement('a');
-  link.download = `network_diagram_${new Date().toISOString().split('T')[0]}.png`;
-  link.href = offscreenCanvas.toDataURL('image/png', 1.0); 
-  link.click();
-};
 
   return (
     <div className="space-y-4">

@@ -35,8 +35,57 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const animationFrameRef = useRef(null);
-  useImperativeHandle(ref, () => ({
-  getCanvas: () => canvasRef.current,
+  
+ useImperativeHandle(ref, () => ({
+  getAsBase64: () => {
+    if (!results || !results.tasks || !results.tasks.length) {
+      console.error("Нет данных для генерации диаграммы Ганта.");
+      return null;
+    }
+
+    try {
+      // Создаем новый canvas для полного рендеринга
+      const offscreenCanvas = document.createElement('canvas');
+      const ctx = offscreenCanvas.getContext('2d');
+
+      // Рассчитываем реальные размеры всего графика без прокрутки
+      const fullChartWidth = LABEL_WIDTH + projectDuration * DAY_WIDTH;
+      const fullChartHeight = HEADER_HEIGHT + results.tasks.length * ROW_HEIGHT;
+      
+      const dpr = 2; // Увеличиваем разрешение для четкости
+      offscreenCanvas.width = fullChartWidth * dpr;
+      offscreenCanvas.height = fullChartHeight * dpr;
+      ctx.scale(dpr, dpr);
+
+      // Сохраняем текущие настройки, чтобы не влиять на отображение
+      const originalScale = scale;
+      const originalOffset = scrollOffset;
+      
+      // Временно сбрасываем масштаб и сдвиг для полного рендеринга
+      setScale(1);
+      setScrollOffset({ x: 0, y: 0 });
+      
+      // Рисуем на временном canvas
+      ctx.fillStyle = BACKGROUND_COLOR;
+      ctx.fillRect(0, 0, fullChartWidth, fullChartHeight);
+      if (showTimeScale) drawTimeScale(ctx, fullChartWidth);
+      drawGrid(ctx, fullChartWidth, fullChartHeight);
+      results.tasks.forEach((task, index) => {
+        drawTask(ctx, task, index, fullChartWidth);
+      });
+      drawBorders(ctx, fullChartWidth, fullChartHeight);
+
+      // Возвращаем оригинальные настройки масштаба и сдвига
+      setScale(originalScale);
+      setScrollOffset(originalOffset);
+
+      return offscreenCanvas.toDataURL('image/png', 1.0);
+
+    } catch (e) {
+      console.error("Ошибка при создании base64 из диаграммы Ганта:", e);
+      return null;
+    }
+  },
 }));
 
   const tasks = results?.tasks || [];

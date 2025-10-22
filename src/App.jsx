@@ -19,10 +19,19 @@ import {
   Settings,
   HelpCircle, 
   Users,
-  Save
+  Save,
+  ScrollText,
+  BookOpen 
 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
-import { exportToWord } from '@/utils/exportUtils';
+import GostViewer from './components/GostViewer';
 import TaskInput from './components/TaskInput';
 import CalculationResults from './components/CalculationResults';
 import NetworkDiagram from './components/NetworkDiagram';
@@ -32,6 +41,7 @@ import ProjectDashboard from './components/ProjectDashboard';
 import Calendar from './components/Calendar';
 import ResourceManagement from './components/ResourceManagement';
 import EnhancedExport from './components/EnhancedExport';
+import { generateAndSaveWordReport } from './utils/exportService';
 import ResourceCalendar from './components/ResourceCalendar';
 import ThemeSettings from './components/ThemeSettings';
 import WhatIfModeling from './components/WhatIfModeling';
@@ -52,6 +62,12 @@ function App() {
     criticalPath: [],
     projectDuration: 0
   });
+  const [resourceLimit, setResourceLimit] = useState(10);
+  const [lastNumericLimit, setLastNumericLimit] = useState(10); 
+  const maxPerformersPerTask = project.tasks.reduce((max, task) => Math.max(max, task.numberOfPerformers), 0);
+  const isResourceLimitExceeded = maxPerformersPerTask > resourceLimit;
+
+  const [baselinePlan, setBaselinePlan] = useState(null);
   const [calculationResults, setCalculationResults] = useState(null);
   const [validationErrors, setValidationErrors] = useState([]);
   const [isCalculating, setIsCalculating] = useState(false);
@@ -62,11 +78,18 @@ function App() {
   const ganttChartRef = useRef(null);
   const userGuideRef = useRef(null);
   const [isExportingWord, setIsExportingWord] = useState(false);
-
   const { loadAutosavedData, clearAutosavedData, hasAutosavedData } = useAutosave(project, calculationResults);
+  const [isGostModalOpen, setGostModalOpen] = useState(false);
 
 
-  
+  useEffect(() => {
+  const off = window.electronAPI?.onMenuShowGost?.(() => {
+    setGostModalOpen(true); 
+  });
+  return () => {
+    window.electronAPI?.removeAllListeners?.('menu-show-gost');
+  };
+}, []);
 
   useEffect(() => {
     logger.logSystemEvent('APP_MOUNTED', {
@@ -139,16 +162,49 @@ function App() {
 
   
 
-  const handleExportToWord = async () => {
-  setIsExportingWord(true);
-  const { success, error } = await exportToWord(project.tasks, calculationResults);
-  if (success) {
-    alert("Word-документ успешно экспортирован!");
-  } else if (error !== 'Сохранение отменено пользователем') {
-    alert(`Ошибка при экспорте в Word: ${error}`);
+ const handleExportToWord = async () => {
+  if (!calculationResults) {
+    alert("Сначала выполните расчет, чтобы экспортировать отчет.");
+    return;
   }
-  setIsExportingWord(false);
+  setIsExportingWord(true);
+
+  try {
+    const networkImagePromise = networkDiagramRef.current?.getAsBase64();
+    const ganttImagePromise = ganttChartRef.current?.getAsBase64();
+
+    const [networkImage, ganttImage] = await Promise.all([
+      networkImagePromise,
+      ganttImagePromise,
+    ]);
+
+    const baselineData = baselinePlan
+      ? {
+          tasks: baselinePlan.tasks, 
+          results: baselinePlan.results,
+        }
+      : null;
+
+    const optimizedData = {
+      tasks: project.tasks, 
+      results: calculationResults,
+      networkImage: networkImage,
+      ganttImage: ganttImage,
+    };
+
+    await generateAndSaveWordReport({
+      baseline: baselineData,
+      optimized: optimizedData,
+    });
+
+  } catch (error) {
+    console.error("Критическая ошибка при экспорте в Word:", error);
+    alert("Произошла непредвиденная ошибка при подготовке данных для отчета.");
+  } finally {
+    setIsExportingWord(false);
+  }
 };
+
 
   useEffect(() => {
     const off = window.electronAPI?.onMenuLoadExampleBasic?.(() => {
@@ -412,8 +468,6 @@ function App() {
       };
     });
 
-   
-
     const validation = validateNetwork(normalizedTasks);
     if (!validation.isValid) {
       setValidationErrors(validation.errors);
@@ -427,21 +481,67 @@ function App() {
     const result = SPUCalculation.calculateNetworkParameters(normalizedTasks);
 
     if (result.isValid) {
+
+    if (!baselinePlan) {
+    
+      const snapshot = {
+        tasks: JSON.parse(JSON.stringify(project.tasks)), 
+        results: JSON.parse(JSON.stringify(result)),      
+    
+        networkImage: null,
+        ganttImage: null,
+      };
+      setBaselinePlan(snapshot);
+
       setCalculationResults(result);
-      setProject(prev => ({
-        ...prev,
-        criticalPath: result.criticalPath,
-        projectDuration: result.projectDuration
-      }));
-      logger.logCalculationSuccess(result);
-      setActiveTab('network');
+    
+      alert('Расчет выполнен. План зафиксирован как базовый.');
+
     } else {
-      setValidationErrors(result.errors);
-      logger.logCalculationError(new Error('Calculation failed'), {
-        errors: result.errors,
-        tasksCount: normalizedTasks.length
-      });
+    
+      const userChoice = confirm(
+        'Расчет выполнен успешно!\n\n' +
+        'Хотите обновить "базовый" план этим новым результатом?\n\n' +
+        '• Нажмите "OK", чтобы этот результат стал новым базовым планом для сравнения.\n' +
+        '• Нажмите "Отмена", чтобы считать этот результат "оптимизацией" (старый базовый план останется для отчета).'
+      );
+
+      if (userChoice) {
+      
+        const snapshot = {
+          tasks: JSON.parse(JSON.stringify(project.tasks)),
+          results: JSON.parse(JSON.stringify(result)),
+          networkImage: null,
+          ganttImage: null,
+        };
+        setBaselinePlan(snapshot);
+        setCalculationResults(result);
+        alert('Базовый план обновлен.');
+      } else {
+        
+        setCalculationResults(result);
+        alert('Расчет выполнен как "оптимизация". Базовый план для сравнения не изменился.');
+      }
     }
+
+
+    setProject(prev => ({
+      ...prev,
+      criticalPath: result.criticalPath,
+      projectDuration: result.projectDuration
+    }));
+
+    logger.logCalculationSuccess(result);
+    setActiveTab('network'); 
+
+  } else {
+
+    setValidationErrors(result.errors);
+    logger.logCalculationError(new Error('Calculation failed'), {
+      errors: result.errors,
+      tasksCount: normalizedTasks.length
+    });
+  }
   } catch (error) {
     setValidationErrors([error.message]);
     logger.logCalculationError(error, {
@@ -452,6 +552,7 @@ function App() {
     setIsCalculating(false);
   }
 };
+
 
   const handleLoadExample = () => {
     try {
@@ -522,6 +623,7 @@ function App() {
     try {
       setProject(prev => ({ ...prev, tasks: [], criticalPath: [], projectDuration: 0 }));
       setCalculationResults(null);
+      setBaselinePlan(null);
       setValidationErrors([]);
       
       logger.logUserAction('CLEAR_ALL_TASKS');
@@ -646,18 +748,17 @@ function App() {
           </div>
         </div>
        
-
-        
-        <Card className="mb-6">
+            <Card className="mb-6">
           <CardHeader>
             <CardTitle>Управление проектом</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button 
                 onClick={handleCalculate} 
-                disabled={project.tasks.length === 0 || isCalculating}
+                disabled={project.tasks.length === 0 || isCalculating || isResourceLimitExceeded}
                 className="bg-green-600 hover:bg-green-700"
+                title={isResourceLimitExceeded ? `Превышен лимит исполнителей. Макс. на задаче: ${maxPerformersPerTask}, лимит: ${resourceLimit}.` : 'Рассчитать параметры проекта (F5)'}
               >
                 <Calculator className="h-4 w-4 mr-2" />
                 {isCalculating ? 'Расчет...' : 'Рассчитать параметры'}
@@ -682,31 +783,35 @@ function App() {
                 <Upload className="h-4 w-4 mr-2" />
                 Открыть проект
               </Button>
+              
               <Button onClick={handleExportToWord} variant="outline" disabled={isExportingWord || project.tasks.length === 0}>
                 <FileText className="h-4 w-4 mr-2" />
                 {isExportingWord ? 'Экспорт...' : 'Экспорт в Word'}
               </Button>
 
+              <Button onClick={handleLoadHelp} variant="outline" title="F1">
+                <HelpCircle className="h-4 w-4 mr-2" />
+                Руководство
+              </Button>
 
-              <Button onClick={handleLoadHelp} variant="outline">
-              <HelpCircle className="h-4 w-4 mr-2" />
-               Руководство пользователя
+              <Button variant="outline" onClick={() => setGostModalOpen(true)} title="F2">
+                <ScrollText className="h-4 w-4 mr-2" />
+                ГОСТ ЕСПД
               </Button>
             </div>
 
-           
             {calculationResults && (
               <Alert className="mt-4 border-green-200 bg-green-50">
                 <CheckCircle className="h-4 w-4 text-green-600" />
                 <AlertDescription className="text-green-800">
                   <strong>Расчет выполнен успешно</strong>
-                  <br />
+                    
+
                   Критический путь: {calculationResults.criticalPath?.join(' → ') || 'Не определен'}
                 </AlertDescription>
               </Alert>
             )}
 
-          
             {validationErrors.length > 0 && (
               <Alert className="mt-4 border-red-200 bg-red-50">
                 <AlertCircle className="h-4 w-4 text-red-600" />
@@ -722,7 +827,6 @@ function App() {
             )}
           </CardContent>
         </Card>
-
       
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
             <TabsList className="tabs-list grid w-full grid-cols-2 lg:grid-cols-7 min-w-max">
@@ -756,12 +860,18 @@ function App() {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="input" className="space-y-4">
-            <TaskInput 
-              tasks={project.tasks}
-              onTasksChange={(updatedTasks) => setProject(prev => ({ ...prev, tasks: updatedTasks }))}
-            />
-          </TabsContent>
+            <TabsContent value="input" className="space-y-4">
+              <TaskInput 
+                tasks={project.tasks}
+                onTasksChange={(updatedTasks) => setProject(prev => ({ ...prev, tasks: updatedTasks }))}
+                resourceLimit={resourceLimit}
+                onResourceLimitChange={setResourceLimit}
+                 isLimitExceeded={isResourceLimitExceeded} 
+                maxPerformers={maxPerformersPerTask} 
+                 lastNumericLimit={lastNumericLimit}
+                onLastNumericLimitChange={setLastNumericLimit}
+              />
+            </TabsContent>
 
           <TabsContent value="results" className="space-y-4">
             {calculationResults ? (
@@ -900,12 +1010,13 @@ function App() {
         </Tabs>
       </div>
        <UserGuide ref={userGuideRef} />
+        <GostViewer open={isGostModalOpen} onOpenChange={setGostModalOpen} />
        {calculationResults && (
-    <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', zIndex: -1 }}>
-      <NetworkDiagram ref={networkDiagramRef} results={calculationResults} />
-      <GanttChart ref={ganttChartRef} results={calculationResults} project={project} />
-    </div>
-  )}
+  <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', zIndex: -1 }}>
+    <NetworkDiagram ref={networkDiagramRef} results={calculationResults} />
+    <GanttChart ref={ganttChartRef} results={calculationResults} project={project} />
+  </div>
+)}
     </div>
   );
 }

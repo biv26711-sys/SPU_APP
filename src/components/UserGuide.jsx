@@ -17,7 +17,7 @@ const UserGuide = forwardRef((props, ref) => {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="user-guide-modal">
+      <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Руководство пользователя - СПУ</DialogTitle>
           <DialogDescription>

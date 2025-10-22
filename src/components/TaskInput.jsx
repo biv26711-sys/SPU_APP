@@ -1,4 +1,7 @@
-import { useState } from 'react';
+import { Checkbox } from "@/components/ui/checkbox";
+import { Check, X } from 'lucide-react';
+import { Infinity as InfinityIcon, TriangleAlert } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -7,6 +10,18 @@ import { Badge } from '@/components/ui/badge';
 import { Trash2, Plus, Edit } from 'lucide-react';
 import { createTask } from '../types/index.js';
 import TaskNameSuggest from './TaskNameSuggest';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
+
 
 const HOURS_PER_DAY = 6;
 
@@ -17,7 +32,9 @@ function computeDurationDays(laborHours, performers, hoursPerDay = HOURS_PER_DAY
   return Math.max(0.1, Math.ceil(d * 10) / 10); 
 }
 
-const TaskInput = ({ tasks, onTasksChange }) => {
+const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange, isLimitExceeded, maxPerformers, lastNumericLimit, onLastNumericLimitChange  }) => {
+ const [localResourceLimit, setLocalResourceLimit] = useState(resourceLimit);
+  const [isConfirmModalOpen, setConfirmModalOpen] = useState(false);
   const [formData, setFormData] = useState({
     id: '',
     name: '',
@@ -26,6 +43,10 @@ const TaskInput = ({ tasks, onTasksChange }) => {
     numberOfPerformers: '1',
     predecessors: ''
   });
+  useEffect(() => {
+  setLocalResourceLimit(resourceLimit);
+}, [resourceLimit]);
+
   const [editingTask, setEditingTask] = useState(null);
 
   const [missingReq, setMissingReq] = useState([]); 
@@ -148,9 +169,35 @@ const TaskInput = ({ tasks, onTasksChange }) => {
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
       <Card>
-        <CardHeader>
+          <CardHeader>
+        <div className="flex justify-between items-center">
           <CardTitle>Список работ ({tasks.length})</CardTitle>
-        </CardHeader>
+          
+          <div className="flex min-h-[28px] items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Пиковая загрузка:</span>
+
+            {resourceLimit === Infinity ? (
+
+             <div className="flex items-center gap-1.5 font-bold text-green-600">
+            <span>{maxPerformers}</span>
+            <span className="text-muted-foreground">/</span>
+            <InfinityIcon className="h-4 w-4 stroke-[2.5]" title="Безлимитные ресурсы" />
+          </div>
+            ) : (
+
+              <span className={`font-bold ${isLimitExceeded ? 'text-red-500' : 'text-green-600'}`}>
+                {maxPerformers} / {resourceLimit}
+              </span>
+            )}
+
+            {isLimitExceeded && resourceLimit !== Infinity && (
+              <span title="Максимальное число исполнителей на одной из задач превышает лимит">
+                  <TriangleAlert className="h-4 w-4 text-amber-500" />
+              </span>
+            )}
+          </div>
+        </div>
+      </CardHeader>  
         <CardContent>
           {tasks.length === 0 ? (
             <p className="text-muted-foreground text-center py-8">
@@ -195,12 +242,63 @@ const TaskInput = ({ tasks, onTasksChange }) => {
 
 
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Plus className="h-5 w-5" />
-            {editingTask ? 'Редактировать работу' : 'Добавить работу'}
-          </CardTitle>
-        </CardHeader>
+         <CardHeader>
+  <div className="flex items-center justify-between">
+    <CardTitle className="flex items-center gap-2">
+      <Plus className="h-5 w-5" />
+      {editingTask ? 'Редактировать работу' : 'Добавить работу'}
+    </CardTitle>
+    
+            <div className="flex items-center gap-4">
+  <Label className="text-sm text-muted-foreground">
+    Лимит исполнителей:
+  </Label>
+
+  <Button
+    variant={resourceLimit === Infinity ? "secondary" : "outline"}
+    size="sm"
+    onClick={() => {
+      if (resourceLimit === Infinity) {
+        onResourceLimitChange(lastNumericLimit);
+      } else {
+        onLastNumericLimitChange(localResourceLimit);
+        onResourceLimitChange(Infinity);
+      }
+    }}
+    className="w-[110px] flex items-center gap-2"
+  >
+    <InfinityIcon className="h-4 w-4" />
+    Безлимит
+  </Button>
+
+  <div className="w-[150px]">
+    {resourceLimit !== Infinity && (
+      <div className="flex items-center gap-2">
+        <Input
+          id="resourceLimit"
+          type="number"
+          value={localResourceLimit}
+          onChange={(e) => setLocalResourceLimit(Number(e.target.value) > 0 ? Number(e.target.value) : 1)}
+          className="h-8 w-16"
+          min="1"
+        />
+        
+        {localResourceLimit !== resourceLimit && (
+          <div className="flex items-center">
+            <Button size="icon" variant="ghost" className="h-7 w-7 text-green-600 hover:bg-accent" onClick={() => setConfirmModalOpen(true)} title="Применить">
+              <Check className="h-5 w-5" />
+            </Button>
+            <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:bg-accent" onClick={() => setLocalResourceLimit(resourceLimit)} title="Отмена">
+              <X className="h-5 w-5" />
+            </Button>
+          </div>
+        )}
+      </div>
+    )}
+  </div>
+</div>
+  </div>
+</CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
@@ -258,7 +356,6 @@ const TaskInput = ({ tasks, onTasksChange }) => {
               </div>
             )}
 
-            {/* обязательные предшественники из шаблона */}
             {missingReq.length > 0 && (
               <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-sm">
                 <div>
@@ -355,6 +452,30 @@ const TaskInput = ({ tasks, onTasksChange }) => {
           </form>
         </CardContent>
       </Card>
+      {isConfirmModalOpen && (
+  <AlertDialog open onOpenChange={setConfirmModalOpen}>
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>Подтвердите изменение</AlertDialogTitle>
+        <AlertDialogDescription>
+          Вы уверены, что хотите изменить лимит исполнителей с {resourceLimit} на {localResourceLimit}? 
+          Это изменение повлияет на расчеты всего проекта.
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel onClick={() => setLocalResourceLimit(resourceLimit)}>Отмена</AlertDialogCancel>
+        <AlertDialogAction 
+          onClick={() => {
+            onResourceLimitChange(localResourceLimit);
+            setConfirmModalOpen(false);
+          }}
+        >
+          Да, изменить
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
+)}
     </div>
   );
 };

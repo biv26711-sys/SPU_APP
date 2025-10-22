@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onMenuCalculate:    (cb) => ipcRenderer.on('menu-calculate', cb),
   onMenuClearAll:     (cb) => ipcRenderer.on('menu-clear-all', cb),
   onMenuShowHelp:     (cb) => ipcRenderer.on('menu-show-help', cb),
+  onMenuShowGost:     (cb) => ipcRenderer.on('menu-show-gost', cb),
 
   
   onMenuLoadExampleBasic:    (cb) => ipcRenderer.on('menu-load-example-basic', cb),

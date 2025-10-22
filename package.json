@@ -9,13 +9,14 @@
   "author": "SPU Team",
   "scripts": {
     "dev": "vite",
-  "electron-dev": "concurrently \"pnpm run dev\" \"wait-on http://localhost:5173 && electron public/electron.cjs\"",
-  "build": "vite build && node build-scripts/post-build.js",
-  "preview": "vite preview",
-  "dist": "pnpm run build && electron-builder",
-"dist-win": "pnpm run build && electron-builder --win",
-  "dist-mac": "pnpm run build && electron-builder --mac",
-  "dist-linux": "pnpm run build && electron-builder --linux"
+    "electron-dev": "concurrently \"pnpm run dev\" \"wait-on http://localhost:5173 && electron public/electron.cjs\"",
+    "postinstall": "electron-rebuild",
+    "build": "vite build && node build-scripts/post-build.js",
+    "preview": "vite preview",
+    "dist": "pnpm run build && electron-builder",
+    "dist-win": "pnpm run build && electron-builder --win",
+    "dist-mac": "pnpm run build && electron-builder --mac",
+    "dist-linux": "pnpm run build && electron-builder --linux"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.0.1",
@@ -123,5 +124,14 @@
       "icon": "public/icon.png",
       "category": "Office"
     }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@tailwindcss/oxide",
+      "better-sqlite3",
+      "electron",
+      "electron-winstaller",
+      "esbuild"
+    ]
   }
 }

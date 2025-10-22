@@ -222,6 +222,15 @@ function createMenu() {
             }
           }
         },
+        {
+        label: 'ГОСТ ЕСПД',
+        accelerator: 'F2',
+        click: () => {
+          if (mainWindow) {
+            mainWindow.webContents.send('menu-show-gost'); 
+          }
+        }
+      },
         { type: 'separator' }, 
    
         {

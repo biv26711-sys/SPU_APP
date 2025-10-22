@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState} from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Document, Packer, Paragraph, Table as DocxTable, TableRow, TableCell, WidthType, AlignmentType, TextRun, HeadingLevel } from 'docx';
 import { saveAs } from 'file-saver';
+import { generateAndSaveWordReport } from '@/utils/exportService';
 
 const formatNumberForCSV = (num) => {
   const number = Number(num);
@@ -48,59 +49,50 @@ const EnhancedExport = ({ results, project, tasks = [], ganttChartRef, networkDi
   };
 
   const exportToWord = async () => {
-    setIsExporting(true);
+   if (!results) {
+    setExportStatus('Нет данных для экспорта. Сначала выполните расчет.');
+    return;
+  }
+  setIsExporting(true);
+  setExportStatus('Подготовка данных для отчета...');
+
+  try {
+    const networkImagePromise = networkDiagramRef.current?.getAsBase64();
+    const ganttImagePromise = ganttChartRef.current?.getAsBase64();
+
+    const [networkImage, ganttImage] = await Promise.all([
+      networkImagePromise,
+      ganttImagePromise
+    ]);
+    
     setExportStatus('Создание Word документа...');
-    try {
-      const doc = new Document({
-        sections: [{
-          properties: {},
-          children: [
-            new Paragraph({ text: "Отчет по сетевому планированию и управлению", heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
-            new Paragraph({ text: `Дата создания: ${new Date().toLocaleDateString('ru-RU')}`, alignment: AlignmentType.CENTER }),
-            new Paragraph({ text: "" }),
-            new Paragraph({ text: "1. Общая информация о проекте", heading: HeadingLevel.HEADING_1 }),
-            new Paragraph({ children: [new TextRun({ text: "Общее количество задач: ", bold: true }), new TextRun({  text: (results?.tasks || []).length.toString() })] }),
-            new Paragraph({ children: [new TextRun({ text: "Длительность проекта: ", bold: true }), new TextRun({ text: `${results?.projectDuration?.toFixed(2) || 0} дней` })] }),
-            new Paragraph({ children: [new TextRun({ text: "Критических работ: ", bold: true }), new TextRun({ text: (results?.tasks || []).filter(t => !t.isDummy && t.isCritical).length.toString() })] }),
-            new Paragraph({ children: [new TextRun({ text: "Общая трудоемкость: ", bold: true }), new TextRun({ text: `${(results?.tasks || []).reduce((sum, t) => sum + (t.laborIntensity || 0), 0)} н-ч` })] }),
-            new Paragraph({ text: "" }),
-            new Paragraph({ text: "2. Критический путь", heading: HeadingLevel.HEADING_1 }),
-            new Paragraph({ text: results?.criticalPath ? results.criticalPath.join(' → ') : 'Не определен' }),
-            new Paragraph({ text: "" }),
-            new Paragraph({ text: "3. Таблица параметров сетевого графика", heading: HeadingLevel.HEADING_1 }),
-          ],
-        }],
-      });
+    const baselineData = project.baselinePlan
+      ? {
+          tasks: project.baselinePlan.tasks,
+          results: project.baselinePlan.results,
+        }
+      : null;
 
-      if (tasks.length > 0) {
-        const tableHeaders = ["ID", "Наименование", "Длит.", "Трудоем.", "Исп.", "Ран. нач.", "Ран. ок.", "Позд. нач.", "Позд. ок.", "Полн. рез.", "Част. рез.", "Крит."];
-        const table = new DocxTable({
-          width: { size: 100, type: WidthType.PERCENTAGE },
-          rows: [
-            new TableRow({ children: tableHeaders.map(text => new TableCell({ children: [new Paragraph({ text, alignment: AlignmentType.CENTER })] })) }),
-            ...(results?.tasks || []).map(task => new TableRow({
-              children: [
-                task.id, task.name, task.duration.toString(), (task.laborIntensity || 0).toString(), task.numberOfPerformers.toString(),
-                task.earlyStart?.toFixed(2) || '0.00', task.earlyFinish?.toFixed(2) || '0.00',
-                task.lateStart?.toFixed(2) || '0.00', task.lateFinish?.toFixed(2) || '0.00',
-                task.totalFloat?.toFixed(2) || '0.00', task.freeFloat?.toFixed(2) || '0.00',
-                (!task.isDummy && task.isCritical) ? 'Да' : 'Нет',
-              ].map(value => new TableCell({ children: [new Paragraph({ text: String(value), alignment: AlignmentType.CENTER })] })),
-            })),
-          ],
-        });
-        doc.addSection({ children: [table] });
-      }
+    const optimizedData = {
+      tasks: project.tasks,
+      results: results,
+      networkImage: networkImage,
+      ganttImage: ganttImage,
+    };
 
-      const blob = await Packer.toBlob(doc);
-      saveAs(blob, `SPU_Project_Report_${new Date().toLocaleDateString('ru-RU')}.docx`);
-      setExportStatus('Word документ успешно создан');
-    } catch (error) {
-      setExportStatus('Ошибка при создании Word документа: ' + error.message);
-    } finally {
-      setIsExporting(false);
-    }
-  };
+    await generateAndSaveWordReport({
+      baseline: baselineData,
+      optimized: optimizedData,
+    });
+
+    setExportStatus('Word документ успешно создан');
+  } catch (error) {
+    console.error("Ошибка при экспорте в Word:", error);
+    setExportStatus(`Ошибка экспорта: ${error.message}`);
+  } finally {
+    setIsExporting(false);
+  }
+};
 
   const exportToMSProjectXML = () => {
     setIsExporting(true);
