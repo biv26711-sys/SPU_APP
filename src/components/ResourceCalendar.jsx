@@ -20,7 +20,7 @@ import {
   X
 } from 'lucide-react';
 
-const ResourceCalendar = ({ project, results }) => {
+const ResourceCalendar = ({ project, results, hoursPerDay = 8 }) => {
   const [holidays, setHolidays] = useState([
     { id: 1, date: '2025-01-01', name: 'Новый год', type: 'national' },
     { id: 2, date: '2025-01-07', name: 'Рождество', type: 'national' },
@@ -104,8 +104,6 @@ const ResourceCalendar = ({ project, results }) => {
     const totalWorkload = tasks.reduce((sum, task) => sum + (task.workload || 0), 0);
     const totalResources = tasks.reduce((sum, task) => sum + task.numberOfPerformers, 0);
     const workingDays = getWorkingDaysInMonth(currentMonth);
-    const hoursPerDay = 8;
-    
     const availableHours = workingDays * hoursPerDay * totalResources;
     const utilization = totalWorkload / availableHours * 100;
 
@@ -463,4 +461,3 @@ const ResourceCalendar = ({ project, results }) => {
 };
 
 export default ResourceCalendar;
-

@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Trash2, Plus, Edit } from 'lucide-react';
 import { createTask } from '../types/index.js';
+import { calcDurationDays, calcLaborHours } from '../utils/time.js';
 import TaskNameSuggest from './TaskNameSuggest';
 import {
   AlertDialog,
@@ -23,16 +24,20 @@ import {
 
 
 
-const HOURS_PER_DAY = 6;
-
-function computeDurationDays(laborHours, performers, hoursPerDay = HOURS_PER_DAY) {
-  const perf = Math.max(1, parseInt(performers) || 1);
-  const hours = Math.max(0, parseFloat(laborHours) || 0);
-  const d = hours / (hoursPerDay * perf);
-  return Math.max(0.1, Math.ceil(d * 10) / 10); 
-}
-
-const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange, isLimitExceeded, maxPerformers, lastNumericLimit, onLastNumericLimitChange  }) => {
+const TaskInput = ({
+  tasks,
+  onTasksChange,
+  resourceLimit,
+  onResourceLimitChange,
+  isLimitExceeded,
+  maxPerformers,
+  lastNumericLimit,
+  onLastNumericLimitChange,
+  hoursPerDay,
+  onHoursPerDayChange,
+  anchoringMode,
+  onAnchoringModeChange,
+}) => {
  const [localResourceLimit, setLocalResourceLimit] = useState(resourceLimit);
   const [isConfirmModalOpen, setConfirmModalOpen] = useState(false);
   const [formData, setFormData] = useState({
@@ -44,13 +49,28 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
     predecessors: ''
   });
   useEffect(() => {
-  setLocalResourceLimit(resourceLimit);
-}, [resourceLimit]);
+    setLocalResourceLimit(resourceLimit);
+  }, [resourceLimit]);
+
+  useEffect(() => {
+    const laborHours = parseFloat(formData.laborIntensity) || 0;
+    if (!laborHours) return;
+    const duration = calcDurationDays(laborHours, formData.numberOfPerformers, hoursPerDay);
+    if (Number.isFinite(duration)) {
+      setFormData(prev => ({ ...prev, duration: String(duration) }));
+    }
+  }, [hoursPerDay, formData.laborIntensity, formData.numberOfPerformers]);
 
   const [editingTask, setEditingTask] = useState(null);
 
   const [missingReq, setMissingReq] = useState([]); 
   const [formError, setFormError] = useState(''); 
+  const handleHoursPerDayChange = (value) => {
+    const num = parseFloat(value);
+    if (!Number.isFinite(num)) return;
+    const next = Math.min(24, Math.max(1, num));
+    onHoursPerDayChange(next);
+  };
 
   const handleInputChange = (field, value) => {
     setFormData(prev => {
@@ -58,11 +78,20 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
 
       if (field === 'numberOfPerformers' && next.laborIntensity) {
         const laborHours = parseFloat(next.laborIntensity) || 0;
-        next.duration = String(computeDurationDays(laborHours, value));
+        next.duration = String(calcDurationDays(laborHours, value, hoursPerDay));
+      } else if (field === 'numberOfPerformers' && next.duration) {
+        const durationDays = parseFloat(next.duration) || 0;
+        const laborHours = calcLaborHours(durationDays, value, hoursPerDay);
+        next.laborIntensity = laborHours ? String(laborHours) : '';
       }
       if (field === 'laborIntensity') {
         const laborHours = parseFloat(value) || 0;
-        next.duration = String(computeDurationDays(laborHours, next.numberOfPerformers));
+        next.duration = String(calcDurationDays(laborHours, next.numberOfPerformers, hoursPerDay));
+      }
+      if (field === 'duration') {
+        const durationDays = parseFloat(value) || 0;
+        const laborHours = calcLaborHours(durationDays, next.numberOfPerformers, hoursPerDay);
+        next.laborIntensity = laborHours ? String(laborHours) : '';
       }
       return next;
     });
@@ -243,14 +272,14 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
 
       <Card>
          <CardHeader>
-  <div className="flex items-center justify-between">
+  <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
     <CardTitle className="flex items-center gap-2">
       <Plus className="h-5 w-5" />
       {editingTask ? 'Редактировать работу' : 'Добавить работу'}
     </CardTitle>
     
-            <div className="flex items-center gap-4">
-  <Label className="text-sm text-muted-foreground">
+            <div className="flex items-center gap-3 flex-nowrap">
+  <Label className="text-sm text-muted-foreground whitespace-nowrap">
     Лимит исполнителей:
   </Label>
 
@@ -271,7 +300,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
     Безлимит
   </Button>
 
-  <div className="w-[150px]">
+  <div className="w-[150px] shrink-0">
     {resourceLimit !== Infinity && (
       <div className="flex items-center gap-2">
         <Input
@@ -302,6 +331,44 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
+              <Label htmlFor="hoursPerDay">Рабочий день (часы)</Label>
+              <div className="flex items-center gap-3">
+                <input
+                  id="hoursPerDay"
+                  type="range"
+                  min="1"
+                  max="24"
+                  step="0.5"
+                  value={hoursPerDay}
+                  onChange={(e) => handleHoursPerDayChange(e.target.value)}
+                  className="w-full"
+                />
+                <Input
+                  type="number"
+                  min="1"
+                  max="24"
+                  step="0.5"
+                  value={hoursPerDay}
+                  onChange={(e) => handleHoursPerDayChange(e.target.value)}
+                  className="h-8 w-20"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="anchoringMode">Якорение фаз</Label>
+              <select
+                id="anchoringMode"
+                value={anchoringMode}
+                onChange={(e) => onAnchoringModeChange(e.target.value)}
+                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="legacy">Вариант 1 (старый)</option>
+                <option value="two-pass">Вариант 2 (двупроходный)</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="id">ID работы *</Label>
               <Input
                 id="id"
@@ -327,7 +394,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
                     : null;
 
                   const durationDays = laborHours != null
-                    ? String(computeDurationDays(laborHours, formData.numberOfPerformers))
+                    ? String(calcDurationDays(laborHours, formData.numberOfPerformers, hoursPerDay))
                     : formData.duration;
 
                   setFormData(f => ({

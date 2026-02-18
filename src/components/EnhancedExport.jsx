@@ -24,7 +24,14 @@ const formatNumberForCSV = (num) => {
   return '0,00';
 };
 
-const EnhancedExport = ({ results, project, tasks = [], ganttChartRef, networkDiagramRef }) => {
+const EnhancedExport = ({
+  results,
+  project,
+  tasks = [],
+  ganttChartRef,
+  networkDiagramRef,
+  hoursPerDay = 8,
+}) => {
   const [isExporting, setIsExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState('');
 
@@ -108,8 +115,8 @@ const EnhancedExport = ({ results, project, tasks = [], ganttChartRef, networkDi
       <UID>${index + 1}</UID>
       <ID>${index + 1}</ID>
       <Name>${task.name}</Name>
-      <Duration>PT${task.duration * 8}H0M0S</Duration>
-      <Work>PT${(task.laborIntensity || task.duration * 8)}H0M0S</Work>
+      <Duration>PT${task.duration * hoursPerDay}H0M0S</Duration>
+      <Work>PT${(task.laborIntensity || (task.duration * hoursPerDay * (task.numberOfPerformers || 1)))}H0M0S</Work>
       <Start>${new Date().toISOString()}</Start>
       <Finish>${new Date(Date.now() + task.duration * 24 * 60 * 60 * 1000).toISOString()}</Finish>
       <Critical>${task.isCritical ? '1' : '0'}</Critical>

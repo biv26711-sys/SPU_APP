@@ -18,7 +18,7 @@ import {
   Palette
 } from 'lucide-react';
 
-const NetworkDiagram = forwardRef(({ results }, ref) => {
+const NetworkDiagram = forwardRef(({ results, anchoringMode = 'legacy', hoursPerDay = 8 }, ref) => {
   const canvasRef = useRef(null);
   
   const [scale, setScale] = useState(1);
@@ -93,7 +93,9 @@ const exportDiagram = () => {
     const ctx = offscreenCanvas.getContext('2d');
 
     const sourceTasks = Array.isArray(results.tasks) ? results.tasks : [];
-    const aoaTasks = sourceTasks.some(t => !looksLikeEdgeId(String(t.id))) ? converting(sourceTasks) : sourceTasks;
+    const aoaTasks = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)))
+      ? converting(sourceTasks, { anchoringMode, hoursPerDay })
+      : sourceTasks;
     const nodes = createNodes(aoaTasks);
     const edges = createEdges(aoaTasks, nodes);
 
@@ -131,7 +133,9 @@ useImperativeHandle(ref, () => ({
         const ctx = offscreenCanvas.getContext('2d');
 
         const sourceTasks = Array.isArray(results.tasks) ? results.tasks : [];
-        const aoaTasks = sourceTasks.some(t => !looksLikeEdgeId(String(t.id))) ? converting(sourceTasks) : sourceTasks;
+        const aoaTasks = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)))
+          ? converting(sourceTasks, { anchoringMode, hoursPerDay })
+          : sourceTasks;
         const nodes = createNodes(aoaTasks);
         const edges = createEdges(aoaTasks, nodes);
 
@@ -221,7 +225,9 @@ useImperativeHandle(ref, () => ({
     const sourceTasks = Array.isArray(results.tasks) ? results.tasks : [];
 
     const needsAdapt = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)));
-    const aoaTasks = needsAdapt ? converting(sourceTasks) : sourceTasks;
+    const aoaTasks = needsAdapt
+      ? converting(sourceTasks, { anchoringMode, hoursPerDay })
+      : sourceTasks;
 
     const tasksForRender = aoaTasks.map(t => ({
       ...t,

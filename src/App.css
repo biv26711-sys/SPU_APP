@@ -95,14 +95,25 @@
 
 
 .tabs-list {
-  min-width: 100%;
+  min-width: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
 
 .tabs-list::-webkit-scrollbar {
   display: none;
+}
+
+.tabs-list-container {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.tabs-scroll-button {
+  flex: 0 0 auto;
 }
 
 .tabs-trigger {
@@ -181,4 +192,3 @@
   font-family: monospace;
   font-size: 0.875rem;
 }
-

@@ -21,7 +21,9 @@ import {
   Users,
   Save,
   ScrollText,
-  BookOpen 
+  BookOpen,
+  ChevronLeft,
+  ChevronRight 
 } from 'lucide-react';
 import {
   Dialog,
@@ -49,6 +51,7 @@ import UserGuide from './components/UserGuide';
 import { SPUCalculation } from './utils/spuCalculations';
 import { validateNetwork } from './utils/calculations';
 import { sampleTasks as exampleTasks } from './types/index';
+import { calcDurationDays, calcLaborHours, roundToOneDecimal } from './utils/time';
 import logger from './utils/logger';
 import useAutosave from './hooks/useAutosave';
 import './App.css';
@@ -64,6 +67,8 @@ function App() {
   });
   const [resourceLimit, setResourceLimit] = useState(10);
   const [lastNumericLimit, setLastNumericLimit] = useState(10); 
+  const [hoursPerDay, setHoursPerDay] = useState(8);
+  const [anchoringMode, setAnchoringMode] = useState('legacy');
   const maxPerformersPerTask = project.tasks.reduce((max, task) => Math.max(max, task.numberOfPerformers), 0);
   const isResourceLimitExceeded = maxPerformersPerTask > resourceLimit;
 
@@ -80,6 +85,31 @@ function App() {
   const [isExportingWord, setIsExportingWord] = useState(false);
   const { loadAutosavedData, clearAutosavedData, hasAutosavedData } = useAutosave(project, calculationResults);
   const [isGostModalOpen, setGostModalOpen] = useState(false);
+  const tabsListRef = useRef(null);
+  const [isTabsOverflowing, setIsTabsOverflowing] = useState(false);
+  const [isTabsAtStart, setIsTabsAtStart] = useState(true);
+  const [isTabsAtEnd, setIsTabsAtEnd] = useState(false);
+
+  const updateTabsScrollState = () => {
+    const el = tabsListRef.current;
+    if (!el) return;
+    const hasOverflow = el.scrollWidth > el.clientWidth + 1;
+    setIsTabsOverflowing(hasOverflow);
+    if (!hasOverflow) {
+      setIsTabsAtStart(true);
+      setIsTabsAtEnd(true);
+      return;
+    }
+    setIsTabsAtStart(el.scrollLeft <= 1);
+    setIsTabsAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
+  };
+
+  const scrollTabs = (direction) => {
+    const el = tabsListRef.current;
+    if (!el) return;
+    const delta = Math.round(el.clientWidth * 0.7);
+    el.scrollBy({ left: direction === 'left' ? -delta : delta, behavior: 'smooth' });
+  };
 
 
   useEffect(() => {
@@ -90,6 +120,56 @@ function App() {
     window.electronAPI?.removeAllListeners?.('menu-show-gost');
   };
 }, []);
+
+  useEffect(() => {
+    let didChange = false;
+    const updatedTasks = project.tasks.map(task => {
+      const laborHours = Number.isFinite(+task.laborIntensity) ? +task.laborIntensity : null;
+      const performers = Math.max(1, parseInt(task.numberOfPerformers, 10) || 1);
+      if (laborHours != null && laborHours > 0) {
+        const duration = calcDurationDays(laborHours, performers, hoursPerDay);
+        if (Number.isFinite(duration) && duration !== task.duration) {
+          didChange = true;
+          return { ...task, duration };
+        }
+      }
+      return task;
+    });
+
+    if (!didChange) return;
+    setProject(prev => ({ ...prev, tasks: updatedTasks }));
+    setCalculationResults(null);
+    setBaselinePlan(null);
+    setValidationErrors([]);
+  }, [hoursPerDay, project.tasks]);
+
+  useEffect(() => {
+    setCalculationResults(null);
+    setBaselinePlan(null);
+    setValidationErrors([]);
+  }, [anchoringMode]);
+
+  useEffect(() => {
+    const el = tabsListRef.current;
+    if (!el) return;
+    const handleResize = () => updateTabsScrollState();
+    const handleScroll = () => updateTabsScrollState();
+    updateTabsScrollState();
+    window.addEventListener('resize', handleResize);
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    let resizeObserver;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => updateTabsScrollState());
+      resizeObserver.observe(el);
+    }
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      el.removeEventListener('scroll', handleScroll);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     logger.logSystemEvent('APP_MOUNTED', {
@@ -338,11 +418,14 @@ function App() {
 
   const handleAddTask = (task) => {
     try {
+      const performers = Math.max(1, parseInt(task.numberOfPerformers, 10) || 1);
       const newTask = {
         ...task,
         id: task.id || `${task.from}-${task.to}`,
-        laborIntensity: task.laborIntensity || task.duration * 8,
-        numberOfPerformers: task.numberOfPerformers || 1
+        laborIntensity: Number.isFinite(+task.laborIntensity)
+          ? +task.laborIntensity
+          : calcLaborHours(task.duration, performers, hoursPerDay),
+        numberOfPerformers: performers
       };
 
       const updatedTasks = [...project.tasks, newTask];
@@ -435,8 +518,9 @@ function App() {
 
     const source = Array.isArray(project.tasks) ? project.tasks : [];
     const needsAdapt = source.some(t => !looksLikeEdgeId(String(t.id)));
-    const tasksForCalc = needsAdapt ? aonToAoa(source, { hoursPerDay: 6, createSink: true }) : source;
-    const HOURS_PER_DAY = 6;
+    const tasksForCalc = needsAdapt
+      ? aonToAoa(source, { hoursPerDay, createSink: true, anchoringMode })
+      : source;
     const normalizedTasks = tasksForCalc.map(t => {
       const p = Math.max(1, parseInt(t.numberOfPerformers, 10) || 1);
       const isDummy = t.isDummy === true || Number(t.duration) === 0;
@@ -447,10 +531,10 @@ function App() {
       if (isDummy) {
         durationDays = 0;
       } else if (laborHours != null && laborHours > 0) {
-        durationDays = Math.max(1, Math.ceil(laborHours / (HOURS_PER_DAY * p)));
+        durationDays = Math.max(0.1, calcDurationDays(laborHours, p, hoursPerDay));
       } else {
         const d = Number.isFinite(+t.duration) ? +t.duration : 0;
-        durationDays = Math.max(1, Math.ceil(d || 1));
+        durationDays = Math.max(0.1, roundToOneDecimal(d || 0));
       }
 
       const preds = Array.isArray(t.predecessors)
@@ -464,11 +548,14 @@ function App() {
         isDummy,
         numberOfPerformers: p,
         duration: durationDays,
+        laborIntensity: laborHours != null && laborHours > 0
+          ? laborHours
+          : calcLaborHours(durationDays, p, hoursPerDay),
         predecessors: preds,
       };
     });
 
-    const validation = validateNetwork(normalizedTasks);
+    const validation = validateNetwork(normalizedTasks, { hoursPerDay });
     if (!validation.isValid) {
       setValidationErrors(validation.errors);
       logger.logCalculationError(new Error('Validation failed'), {
@@ -478,7 +565,7 @@ function App() {
       return;
     }
 
-    const result = SPUCalculation.calculateNetworkParameters(normalizedTasks);
+    const result = SPUCalculation.calculateNetworkParameters(normalizedTasks, { hoursPerDay });
 
     if (result.isValid) {
 
@@ -580,8 +667,8 @@ function App() {
         const req = (await window.electronAPI.invoke('templates:requiredFor', tpl.id)) || [];
         const preds = req.map(p => String(p.id));
 
-        const hours = Math.ceil((tpl.base_duration_minutes || 0) / 60);
-        const days  = Math.max(1, Math.ceil((tpl.base_duration_minutes || 0) / 1440));
+        const hours = roundToOneDecimal((tpl.base_duration_minutes || 0) / 60);
+        const days = Math.max(0.1, calcDurationDays(hours, 1, hoursPerDay));
 
         tasks.push({
           id: String(tpl.id),
@@ -829,36 +916,64 @@ function App() {
         </Card>
       
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
-            <TabsList className="tabs-list grid w-full grid-cols-2 lg:grid-cols-7 min-w-max">
-            <TabsTrigger value="input" className="tabs-trigger flex items-center gap-2">
-              <FileText className="h-4 w-4" />
-              <span className="hidden sm:inline">Ввод работ</span>
-            </TabsTrigger>
-            <TabsTrigger value="network" className="tabs-trigger flex items-center gap-2">
-              <Network className="h-4 w-4" />
-              <span className="hidden sm:inline">Сетевой график</span>
-            </TabsTrigger>
-            <TabsTrigger value="results" className="tabs-trigger flex items-center gap-2">
-              <Calculator className="h-4 w-4" />
-              <span className="hidden sm:inline">Результаты</span>
-            </TabsTrigger>
-            <TabsTrigger value="gantt" className="tabs-trigger flex items-center gap-2">
-              <BarChart3 className="h-4 w-4" />
-              <span className="hidden sm:inline">Диаграмма Ганта</span>
-            </TabsTrigger>
-            <TabsTrigger value="calendar" className="tabs-trigger flex items-center gap-2">
-              <Activity className="h-4 w-4" />
-              <span className="hidden sm:inline">Календарь</span>
-            </TabsTrigger>
-            <TabsTrigger value="analysis" className="tabs-trigger flex items-center gap-2">
-              <BarChart3 className="h-4 w-4" />
-              <span className="hidden sm:inline">Анализ</span>
-            </TabsTrigger>
-            <TabsTrigger value="tools" className="tabs-trigger flex items-center gap-2">
-              <Settings className="h-4 w-4" />
-              <span className="hidden sm:inline">Инструменты</span>
-            </TabsTrigger>
-          </TabsList>
+          <div className="tabs-list-container">
+            {isTabsOverflowing && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="tabs-scroll-button"
+                onClick={() => scrollTabs('left')}
+                disabled={isTabsAtStart}
+                aria-label="Прокрутить вкладки влево"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+            )}
+            <TabsList ref={tabsListRef} className="tabs-list flex flex-1 w-full flex-nowrap gap-2 justify-start">
+              <TabsTrigger value="input" className="tabs-trigger flex items-center gap-2">
+                <FileText className="h-4 w-4" />
+                <span className="hidden sm:inline">Ввод работ</span>
+              </TabsTrigger>
+              <TabsTrigger value="network" className="tabs-trigger flex items-center gap-2">
+                <Network className="h-4 w-4" />
+                <span className="hidden sm:inline">Сетевой график</span>
+              </TabsTrigger>
+              <TabsTrigger value="results" className="tabs-trigger flex items-center gap-2">
+                <Calculator className="h-4 w-4" />
+                <span className="hidden sm:inline">Результаты</span>
+              </TabsTrigger>
+              <TabsTrigger value="gantt" className="tabs-trigger flex items-center gap-2">
+                <BarChart3 className="h-4 w-4" />
+                <span className="hidden sm:inline">Диаграмма Ганта</span>
+              </TabsTrigger>
+              <TabsTrigger value="calendar" className="tabs-trigger flex items-center gap-2">
+                <Activity className="h-4 w-4" />
+                <span className="hidden sm:inline">Календарь</span>
+              </TabsTrigger>
+              <TabsTrigger value="analysis" className="tabs-trigger flex items-center gap-2">
+                <BarChart3 className="h-4 w-4" />
+                <span className="hidden sm:inline">Анализ</span>
+              </TabsTrigger>
+              <TabsTrigger value="tools" className="tabs-trigger flex items-center gap-2">
+                <Settings className="h-4 w-4" />
+                <span className="hidden sm:inline">Инструменты</span>
+              </TabsTrigger>
+            </TabsList>
+            {isTabsOverflowing && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="tabs-scroll-button"
+                onClick={() => scrollTabs('right')}
+                disabled={isTabsAtEnd}
+                aria-label="Прокрутить вкладки вправо"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
 
             <TabsContent value="input" className="space-y-4">
               <TaskInput 
@@ -870,6 +985,10 @@ function App() {
                 maxPerformers={maxPerformersPerTask} 
                  lastNumericLimit={lastNumericLimit}
                 onLastNumericLimitChange={setLastNumericLimit}
+                hoursPerDay={hoursPerDay}
+                onHoursPerDayChange={setHoursPerDay}
+                anchoringMode={anchoringMode}
+                onAnchoringModeChange={setAnchoringMode}
               />
             </TabsContent>
 
@@ -889,7 +1008,14 @@ function App() {
           </TabsContent>
 
          <TabsContent value="network" className="space-y-4">
-            {calculationResults ? ( <NetworkDiagram ref={networkDiagramRef} results={calculationResults} />) : (
+            {calculationResults ? (
+              <NetworkDiagram
+                ref={networkDiagramRef}
+                results={calculationResults}
+                anchoringMode={anchoringMode}
+                hoursPerDay={hoursPerDay}
+              />
+            ) : (
               <Card>
               <CardContent className="text-center py-8">
                 <Network className="h-12 w-12 mx-auto text-gray-400 mb-4" />
@@ -921,7 +1047,7 @@ function App() {
               
               <TabsContent value="dashboard">
                 {calculationResults ? (
-                  <ProjectDashboard results={calculationResults} project={project} />
+                  <ProjectDashboard results={calculationResults} project={project} hoursPerDay={hoursPerDay} />
                 ) : (
                   <Card>
                     <CardContent className="text-center py-8">
@@ -936,7 +1062,7 @@ function App() {
               
               <TabsContent value="resources">
                 {calculationResults ? (
-                  <ResourceManagement results={calculationResults} project={project} />
+                  <ResourceManagement results={calculationResults} project={project} hoursPerDay={hoursPerDay} />
                 ) : (
                   <Card>
                     <CardContent className="text-center py-8">
@@ -953,6 +1079,7 @@ function App() {
                 <WhatIfModeling 
                   originalProject={project}
                   originalResults={calculationResults}
+                  hoursPerDay={hoursPerDay}
                 />
               </TabsContent>
             </Tabs>
@@ -984,6 +1111,7 @@ function App() {
                     tasks={project.tasks}
                     ganttChartRef={ganttChartRef}
                     networkDiagramRef={networkDiagramRef}
+                    hoursPerDay={hoursPerDay}
                   />
               </TabsContent>
               
@@ -1013,7 +1141,12 @@ function App() {
         <GostViewer open={isGostModalOpen} onOpenChange={setGostModalOpen} />
        {calculationResults && (
   <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', zIndex: -1 }}>
-    <NetworkDiagram ref={networkDiagramRef} results={calculationResults} />
+    <NetworkDiagram
+      ref={networkDiagramRef}
+      results={calculationResults}
+      anchoringMode={anchoringMode}
+      hoursPerDay={hoursPerDay}
+    />
     <GanttChart ref={ganttChartRef} results={calculationResults} project={project} />
   </div>
 )}

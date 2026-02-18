@@ -1,12 +1,17 @@
 
+import { calcLaborHours } from './time.js';
+
 export class SPUTask {
-  constructor(name, duration, from, to, laborIntensity = 0, numberOfPerformers = 1) {
+  constructor(name, duration, from, to, laborIntensity = 0, numberOfPerformers = 1, hoursPerDay = 8) {
     this.name = name;
-    this.duration = parseFloat(duration);
+    this.duration = parseFloat(duration) || 0;
     this.from = from;
     this.to = to;
-    this.laborIntensity = parseFloat(laborIntensity) || this.duration * 8; 
-    this.numberOfPerformers = parseInt(numberOfPerformers) || 1;
+    this.numberOfPerformers = Math.max(1, parseInt(numberOfPerformers, 10) || 1);
+    const parsedLabor = Number(laborIntensity);
+    this.laborIntensity = Number.isFinite(parsedLabor)
+      ? parsedLabor
+      : calcLaborHours(this.duration, this.numberOfPerformers, hoursPerDay);
     this.ES = 0;
     this.EF = 0; 
     this.LS = 0; 
@@ -45,7 +50,7 @@ export class SPUTask {
 }
 
 export class SPUCalculation {
-  constructor(tasks) {
+  constructor(tasks, { hoursPerDay = 8 } = {}) {
     this.tasks = tasks.map(task => {
       if (task instanceof SPUTask) {
         return task;
@@ -56,7 +61,8 @@ export class SPUCalculation {
         task.id.split("-")[0],
         task.id.split("-")[1],
         task.laborIntensity,
-        task.numberOfPerformers
+        task.numberOfPerformers,
+        hoursPerDay
       );
     });
   }
@@ -198,7 +204,7 @@ export class SPUCalculation {
     return path;
   }
 
-  static calculateNetworkParameters(tasks) {
+  static calculateNetworkParameters(tasks, { hoursPerDay = 8 } = {}) {
     try {
       const spuTasks = tasks.map(task => {
         const [from, to] = task.id.split("-");
@@ -208,11 +214,12 @@ export class SPUCalculation {
           from,
           to,
           task.laborIntensity,
-          task.numberOfPerformers
+          task.numberOfPerformers,
+          hoursPerDay
         );
       });
 
-      const calculation = new SPUCalculation(spuTasks);
+      const calculation = new SPUCalculation(spuTasks, { hoursPerDay });
       const result = calculation.calculateEarlyStartAndFinish();
 
       const calculatedTasks = result.tasks.map(spuTask => ({
@@ -255,7 +262,7 @@ export class SPUCalculation {
     }
   }
 
-  static validateNetwork(tasks) {
+  static validateNetwork(tasks, { hoursPerDay = 8 } = {}) {
     const errors = [];
     
     if (!Array.isArray(tasks) || tasks.length === 0) { 
@@ -281,7 +288,7 @@ export class SPUCalculation {
           errors.push(`Некорректная продолжительность (ожидалось 0) для фиктивной задачи: ${task.id}`);
         }
       } else {
-        if (!Number.isFinite(dur) || dur < 1) {
+        if (!Number.isFinite(dur) || dur < 0.1) {
           errors.push(`Некорректная продолжительность для задачи: ${task.id}`);
         }
       }
@@ -302,10 +309,11 @@ export class SPUCalculation {
           from,
           to,
           task.laborIntensity, 
-          task.numberOfPerformers 
+          task.numberOfPerformers,
+          hoursPerDay
         );
       });
-      const calculation = new SPUCalculation(spuTasks);
+      const calculation = new SPUCalculation(spuTasks, { hoursPerDay });
       calculation.calculateEarlyStartAndFinish();
     } catch (error) {
       errors.push(error.message);
@@ -320,4 +328,3 @@ export class SPUCalculation {
 
 export const calculateNetworkParameters = SPUCalculation.calculateNetworkParameters;
 export const validateNetwork = SPUCalculation.validateNetwork;
-

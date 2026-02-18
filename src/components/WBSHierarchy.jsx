@@ -17,8 +17,9 @@ import {
   Folder,
   FileText
 } from 'lucide-react';
+import { calcLaborHours } from '../utils/time.js';
 
-const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
+const WBSHierarchy = ({ tasks, onUpdateTasks, hoursPerDay = 8 }) => {
   const [wbsTree, setWbsTree] = useState([]);
   const [expandedNodes, setExpandedNodes] = useState(new Set());
   const [editingNode, setEditingNode] = useState(null);
@@ -246,7 +247,7 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
         id: newNode.id,
         name: newNode.name,
         duration: 1,
-        laborIntensity: 8,
+        laborIntensity: calcLaborHours(1, 1, hoursPerDay),
         numberOfPerformers: 1,
         predecessors: [],
         isCritical: false
@@ -621,4 +622,3 @@ const WBSHierarchy = ({ tasks, onUpdateTasks }) => {
 };
 
 export default WBSHierarchy;
-
