@@ -26,15 +26,22 @@ import {
 const HOURS_PER_DAY = 6;
 
 function computeDurationDays(laborHours, performers, hoursPerDay = HOURS_PER_DAY) {
-  const perf = Math.max(1, parseInt(performers) || 1);
-  const hours = Math.max(0, parseFloat(laborHours) || 0);
+  const perf = Math.max(1, parseInt(performers, 10) || 1);
+  const hours = parseFloat(laborHours);
+  if (!Number.isFinite(hours) || hours <= 0) return null;
   const d = hours / (hoursPerDay * perf);
-  return Math.max(0.1, Math.ceil(d * 10) / 10); 
+  return Math.max(1, Math.ceil(d));
 }
 
-const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange, isLimitExceeded, maxPerformers, lastNumericLimit, onLastNumericLimitChange  }) => {
+function getDerivedDuration(laborHours, performers, hoursPerDay, fallback = '') {
+  const computed = computeDurationDays(laborHours, performers, hoursPerDay);
+  return computed != null ? String(computed) : (fallback ?? '');
+}
+
+const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange, isLimitExceeded, maxPerformers, lastNumericLimit, onLastNumericLimitChange, hoursPerDay, onHoursPerDayChange  }) => {
  const [localResourceLimit, setLocalResourceLimit] = useState(resourceLimit);
   const [isConfirmModalOpen, setConfirmModalOpen] = useState(false);
+  const [isHoursConfirmModalOpen, setHoursConfirmModalOpen] = useState(false);
   const [formData, setFormData] = useState({
     id: '',
     name: '',
@@ -43,26 +50,40 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
     numberOfPerformers: '1',
     predecessors: ''
   });
+  const [localHoursPerDay, setLocalHoursPerDay] = useState(hoursPerDay);
+
   useEffect(() => {
-  setLocalResourceLimit(resourceLimit);
-}, [resourceLimit]);
+    setLocalResourceLimit(resourceLimit);
+  }, [resourceLimit]);
+
+  useEffect(() => {
+    setLocalHoursPerDay(hoursPerDay);
+  }, [hoursPerDay]);
 
   const [editingTask, setEditingTask] = useState(null);
 
   const [missingReq, setMissingReq] = useState([]); 
   const [formError, setFormError] = useState(''); 
 
+  useEffect(() => {
+    setFormData(prev => {
+      const laborHours = parseFloat(prev.laborIntensity);
+      const duration = getDerivedDuration(laborHours, prev.numberOfPerformers, hoursPerDay, prev.duration);
+      return duration === prev.duration ? prev : { ...prev, duration };
+    });
+  }, [hoursPerDay]);
+
   const handleInputChange = (field, value) => {
     setFormData(prev => {
       const next = { ...prev, [field]: value };
 
-      if (field === 'numberOfPerformers' && next.laborIntensity) {
-        const laborHours = parseFloat(next.laborIntensity) || 0;
-        next.duration = String(computeDurationDays(laborHours, value));
-      }
       if (field === 'laborIntensity') {
-        const laborHours = parseFloat(value) || 0;
-        next.duration = String(computeDurationDays(laborHours, next.numberOfPerformers));
+        const laborHours = parseFloat(value);
+        next.duration = getDerivedDuration(laborHours, next.numberOfPerformers, hoursPerDay, '');
+      }
+      if (field === 'numberOfPerformers') {
+        const laborHours = parseFloat(next.laborIntensity);
+        next.duration = getDerivedDuration(laborHours, next.numberOfPerformers, hoursPerDay, next.duration);
       }
       return next;
     });
@@ -84,9 +105,10 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
       !String(formData.id).trim() || 
       !String(formData.name).trim() || 
       !String(formData.duration).trim() || 
+      !String(formData.laborIntensity).trim() || 
       !String(formData.numberOfPerformers).trim() 
     ) {
-      setFormError('Пожалуйста, заполните все обязательные поля'); 
+      setFormError("Пожалуйста, заполните все обязательные поля"); 
       return;
     }
 
@@ -95,12 +117,15 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
       .map(p => p.trim())
       .filter(Boolean);
 
+    const laborHours = parseFloat(formData.laborIntensity);
+    const durationDays = getDerivedDuration(laborHours, formData.numberOfPerformers, hoursPerDay, formData.duration);
+
     const newTask = createTask(
       formData.id,
       formData.name,
-      parseFloat(formData.duration),
-      (formData.laborIntensity !== '' ? parseFloat(formData.laborIntensity) : null),
-      parseInt(formData.numberOfPerformers),
+      parseFloat(durationDays),
+      (Number.isFinite(laborHours) ? laborHours : null),
+      parseInt(formData.numberOfPerformers, 10),
       predecessors
     );
 
@@ -134,7 +159,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
     setFormData({
       id: task.id,
       name: task.name,
-      duration: String(task.duration),
+      duration: getDerivedDuration(task.laborIntensity, task.numberOfPerformers, hoursPerDay, task.duration),
       laborIntensity: String(task.laborIntensity ?? ''),
       numberOfPerformers: String(task.numberOfPerformers),
       predecessors: task.predecessors.join(', ')
@@ -201,7 +226,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
         <CardContent>
           {tasks.length === 0 ? (
             <p className="text-muted-foreground text-center py-8">
-              Работы не добавлены. Используйте форму справа для добавления работ.
+              Работы не были добавлены. Используйте форму справа для добавления работ.
             </p>
           ) : (
             <div className="space-y-3 max-h-[600px] overflow-y-auto">
@@ -219,7 +244,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
                       )}
                     </div>
                     <div className="text-sm text-muted-foreground space-y-1">
-                      <div>Длительность: {task.duration} дн.</div>
+                      <div>Длительность: {getDerivedDuration(task.laborIntensity, task.numberOfPerformers, hoursPerDay, task.duration)} дн.</div>
                       <div>Трудоемкость: {task.laborIntensity} н-ч</div>
                       <div>Исполнители: {task.numberOfPerformers} чел.</div>
                       <div>Предшественники: {task.predecessors.length > 0 ? task.predecessors.join(', ') : 'нет'}</div>
@@ -250,6 +275,37 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
     </CardTitle>
     
             <div className="flex items-center gap-4">
+  <div className="flex items-center gap-2">
+    <Label className="text-sm text-muted-foreground">
+      Часов в рабочем дне:
+    </Label>
+    <Input
+      id="hoursPerDay"
+      type="number"
+      min="6"
+      max="12"
+      step="1"
+      value={localHoursPerDay}
+      onChange={(e) => {
+        const num = Number(e.target.value);
+        const next = Number.isFinite(num) ? Math.min(12, Math.max(6, num)) : 6;
+        setLocalHoursPerDay(next);
+      }}
+      className="h-8 w-16"
+    />
+
+    {localHoursPerDay !== hoursPerDay && (
+      <div className="flex items-center">
+        <Button size="icon" variant="ghost" className="h-7 w-7 text-green-600 hover:bg-accent" onClick={() => setHoursConfirmModalOpen(true)} title="Применить">
+          <Check className="h-5 w-5" />
+        </Button>
+        <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:bg-accent" onClick={() => setLocalHoursPerDay(hoursPerDay)} title="Отмена">
+          <X className="h-5 w-5" />
+        </Button>
+      </div>
+    )}
+  </div>
+
   <Label className="text-sm text-muted-foreground">
     Лимит исполнителей:
   </Label>
@@ -327,7 +383,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
                     : null;
 
                   const durationDays = laborHours != null
-                    ? String(computeDurationDays(laborHours, formData.numberOfPerformers))
+                    ? getDerivedDuration(laborHours, formData.numberOfPerformers, hoursPerDay, formData.duration)
                     : formData.duration;
 
                   setFormData(f => ({
@@ -396,16 +452,16 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
               <Input
                 id="duration"
                 type="number"
-                step="0.1"
-                min="0.1"
+                step="1"
+                min="1"
                 value={formData.duration}
-                onChange={(e) => handleInputChange('duration', e.target.value)}
-                placeholder="10"
+                readOnly
+                placeholder="Автоматический расчет"
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="laborIntensity">Трудоемкость (н-ч)</Label>
+              <Label htmlFor="laborIntensity">Трудоемкость (н-ч) *</Label>
               <Input
                 id="laborIntensity"
                 type="number"
@@ -441,7 +497,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
 
             <div className="flex gap-2">
               <Button type="submit" className="flex-1">
-                {editingTask ? 'Сохранить изменения' : 'Добавить работу'}
+                {editingTask ? 'Сохранить изменение' : 'Добавить работу'}
               </Button>
               {editingTask && (
                 <Button type="button" variant="outline" onClick={cancelEdit}>
@@ -452,11 +508,11 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
           </form>
         </CardContent>
       </Card>
-      {isConfirmModalOpen && (
+{isConfirmModalOpen && (
   <AlertDialog open onOpenChange={setConfirmModalOpen}>
     <AlertDialogContent>
       <AlertDialogHeader>
-        <AlertDialogTitle>Подтвердите изменение</AlertDialogTitle>
+        <AlertDialogTitle>Подтвердите изменения</AlertDialogTitle>
         <AlertDialogDescription>
           Вы уверены, что хотите изменить лимит исполнителей с {resourceLimit} на {localResourceLimit}? 
           Это изменение повлияет на расчеты всего проекта.
@@ -476,8 +532,34 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
     </AlertDialogContent>
   </AlertDialog>
 )}
+
+{isHoursConfirmModalOpen && (
+  <AlertDialog open onOpenChange={setHoursConfirmModalOpen}>
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>Подтвердите изменение</AlertDialogTitle>
+        <AlertDialogDescription>
+          Вы уверены, что хотите изменить часы в рабочем дне с {hoursPerDay} на {localHoursPerDay}?
+          Это приведет к пересчету длительностей и потребует повторного расчета проекта.
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel onClick={() => setLocalHoursPerDay(hoursPerDay)}>Отмена</AlertDialogCancel>
+        <AlertDialogAction
+          onClick={() => {
+            onHoursPerDayChange(localHoursPerDay);
+            setHoursConfirmModalOpen(false);
+          }}
+        >
+          Да, изменить
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
+)}
     </div>
   );
 };
 
 export default TaskInput;
+

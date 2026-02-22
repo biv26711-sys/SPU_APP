@@ -64,6 +64,8 @@ function App() {
   });
   const [resourceLimit, setResourceLimit] = useState(10);
   const [lastNumericLimit, setLastNumericLimit] = useState(10); 
+  const [hoursPerDay, setHoursPerDay] = useState(6);
+  const [shouldRecalcAfterHoursChange, setShouldRecalcAfterHoursChange] = useState(false);
   const maxPerformersPerTask = project.tasks.reduce((max, task) => Math.max(max, task.numberOfPerformers), 0);
   const isResourceLimitExceeded = maxPerformersPerTask > resourceLimit;
 
@@ -80,6 +82,24 @@ function App() {
   const [isExportingWord, setIsExportingWord] = useState(false);
   const { loadAutosavedData, clearAutosavedData, hasAutosavedData } = useAutosave(project, calculationResults);
   const [isGostModalOpen, setGostModalOpen] = useState(false);
+
+  useEffect(() => {
+    const source = Array.isArray(project.tasks) ? project.tasks : [];
+    let changed = false;
+    const tasks = source.map(t => {
+      const laborHours = Number.isFinite(+t.laborIntensity) ? +t.laborIntensity : null;
+      if (laborHours == null || laborHours <= 0) return t;
+      const performers = Math.max(1, parseInt(t.numberOfPerformers, 10) || 1);
+      const durationDays = Math.max(1, Math.ceil(laborHours / (hoursPerDay * performers)));
+      if (t.duration === durationDays) return t;
+      changed = true;
+      return { ...t, duration: durationDays };
+    });
+    if (!changed) return;
+    setProject(prev => ({ ...prev, tasks, criticalPath: [], projectDuration: 0 }));
+    setCalculationResults(null);
+    setValidationErrors([]);
+  }, [hoursPerDay, project.tasks]);
 
 
   useEffect(() => {
@@ -341,7 +361,7 @@ function App() {
       const newTask = {
         ...task,
         id: task.id || `${task.from}-${task.to}`,
-        laborIntensity: task.laborIntensity || task.duration * 8,
+        laborIntensity: task.laborIntensity || task.duration * hoursPerDay,
         numberOfPerformers: task.numberOfPerformers || 1
       };
 
@@ -423,6 +443,11 @@ function App() {
   };
 
 
+  const handleHoursPerDayChange = (nextHours) => {
+    setHoursPerDay(nextHours);
+    setShouldRecalcAfterHoursChange(true);
+  };
+
   const handleCalculate = async () => {
   setIsCalculating(true);
   setValidationErrors([]);
@@ -435,8 +460,8 @@ function App() {
 
     const source = Array.isArray(project.tasks) ? project.tasks : [];
     const needsAdapt = source.some(t => !looksLikeEdgeId(String(t.id)));
-    const tasksForCalc = needsAdapt ? aonToAoa(source, { hoursPerDay: 6, createSink: true }) : source;
-    const HOURS_PER_DAY = 6;
+    const tasksForCalc = needsAdapt ? aonToAoa(source, { hoursPerDay, createSink: true }) : source;
+    const HOURS_PER_DAY = hoursPerDay;
     const normalizedTasks = tasksForCalc.map(t => {
       const p = Math.max(1, parseInt(t.numberOfPerformers, 10) || 1);
       const isDummy = t.isDummy === true || Number(t.duration) === 0;
@@ -568,6 +593,17 @@ function App() {
     }
   };
 
+  useEffect(() => {
+    if (!shouldRecalcAfterHoursChange) return;
+    if (project.tasks.length === 0) {
+      setShouldRecalcAfterHoursChange(false);
+      return;
+    }
+    if (isCalculating || isResourceLimitExceeded) return;
+    setShouldRecalcAfterHoursChange(false);
+    handleCalculate();
+  }, [shouldRecalcAfterHoursChange, hoursPerDay]);
+
 
   const handleLoadRequiredFromDB = async () => {
     try {
@@ -580,15 +616,18 @@ function App() {
         const req = (await window.electronAPI.invoke('templates:requiredFor', tpl.id)) || [];
         const preds = req.map(p => String(p.id));
 
-        const hours = Math.ceil((tpl.base_duration_minutes || 0) / 60);
-        const days  = Math.max(1, Math.ceil((tpl.base_duration_minutes || 0) / 1440));
+        const laborHours = (tpl.base_duration_minutes || 0) / 60;
+        const performers = 1;
+        const durationDays = laborHours > 0
+          ? Math.max(1, Math.ceil(laborHours / (hoursPerDay * performers)))
+          : 1;
 
         tasks.push({
           id: String(tpl.id),
           name: tpl.name,
-          duration: days,
-          laborIntensity: hours,
-          numberOfPerformers: 1,
+          duration: durationDays,
+          laborIntensity: laborHours > 0 ? Math.ceil(laborHours * 10) / 10 : 0,
+          numberOfPerformers: performers,
           predecessors: preds,
           phase: tpl.phase_id,
         });
@@ -868,8 +907,10 @@ function App() {
                 onResourceLimitChange={setResourceLimit}
                  isLimitExceeded={isResourceLimitExceeded} 
                 maxPerformers={maxPerformersPerTask} 
-                 lastNumericLimit={lastNumericLimit}
+                lastNumericLimit={lastNumericLimit}
                 onLastNumericLimitChange={setLastNumericLimit}
+                hoursPerDay={hoursPerDay}
+                onHoursPerDayChange={handleHoursPerDayChange}
               />
             </TabsContent>
 
