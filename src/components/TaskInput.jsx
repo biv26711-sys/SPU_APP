@@ -35,8 +35,6 @@ const TaskInput = ({
   onLastNumericLimitChange,
   hoursPerDay,
   onHoursPerDayChange,
-  anchoringMode,
-  onAnchoringModeChange,
 }) => {
  const [localResourceLimit, setLocalResourceLimit] = useState(resourceLimit);
   const [isConfirmModalOpen, setConfirmModalOpen] = useState(false);
@@ -48,6 +46,7 @@ const TaskInput = ({
     numberOfPerformers: '1',
     predecessors: ''
   });
+  const [predecessorSelections, setPredecessorSelections] = useState(['']);
   useEffect(() => {
     setLocalResourceLimit(resourceLimit);
   }, [resourceLimit]);
@@ -65,6 +64,52 @@ const TaskInput = ({
 
   const [missingReq, setMissingReq] = useState([]); 
   const [formError, setFormError] = useState(''); 
+  const existingTaskIds = new Set(
+    (Array.isArray(tasks) ? tasks : [])
+      .map(task => String(task?.id ?? '').trim())
+      .filter(Boolean)
+  );
+  const currentTaskId = String(formData.id || '').trim();
+  const editingTaskIndex = editingTask
+    ? tasks.findIndex(task => String(task?.id) === String(editingTask.id))
+    : -1;
+  const availablePredecessorOptions = tasks
+    .map((task, index) => ({
+      id: String(task?.id ?? '').trim(),
+      name: String(task?.name ?? ''),
+      index
+    }))
+    .filter(task => {
+      if (!task.id) return false;
+      if (task.id === currentTaskId) return false;
+      if (editingTaskIndex >= 0) {
+        return task.index < editingTaskIndex;
+      }
+      return true;
+    });
+  const availablePredecessorIdSet = new Set(availablePredecessorOptions.map(task => task.id));
+  const MAX_PREDECESSORS = 4;
+  const isTaskIdentityReady = Boolean(String(formData.id || '').trim() && String(formData.name || '').trim());
+  const selectedPredecessors = predecessorSelections
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  const hasEmptyPredecessorSelection = predecessorSelections.some(value => !String(value || '').trim());
+  const canAddPredecessorRow = !hasEmptyPredecessorSelection &&
+    predecessorSelections.length < MAX_PREDECESSORS &&
+    selectedPredecessors.length < MAX_PREDECESSORS &&
+    availablePredecessorOptions.some(task => !selectedPredecessors.includes(task.id));
+  const getVisiblePredecessors = (task) => {
+    const taskId = String(task?.id ?? '').trim();
+    const preds = Array.isArray(task?.predecessors) ? task.predecessors : [];
+    return Array.from(
+      new Set(
+        preds
+          .map(pred => String(pred ?? '').trim())
+          .filter(predId => predId && predId !== taskId && existingTaskIds.has(predId))
+      )
+    );
+  };
+
   const handleHoursPerDayChange = (value) => {
     const num = parseFloat(value);
     if (!Number.isFinite(num)) return;
@@ -119,10 +164,23 @@ const TaskInput = ({
       return;
     }
 
-    const predecessors = formData.predecessors
-      .split(',')
-      .map(p => p.trim())
-      .filter(Boolean);
+    const predecessors = Array.from(
+      new Set(
+        predecessorSelections
+          .map(p => String(p || '').trim())
+          .map(p => p.trim())
+          .filter(Boolean)
+      )
+    );
+    const invalidPredecessors = predecessors.filter(predId => !availablePredecessorIdSet.has(predId));
+    if (invalidPredecessors.length > 0) {
+      setFormError(`Недопустимые предшественники: ${invalidPredecessors.join(', ')}`);
+      return;
+    }
+    if (predecessors.length > MAX_PREDECESSORS) {
+      setFormError(`Можно указать не более ${MAX_PREDECESSORS} предшественников.`);
+      return;
+    }
 
     const newTask = createTask(
       formData.id,
@@ -155,19 +213,28 @@ const TaskInput = ({
       numberOfPerformers: '1',
       predecessors: ''
     });
+    setPredecessorSelections(['']);
     setMissingReq([]);
     setFormError(''); 
   };
 
   const handleEdit = (task) => {
+    const existingPreds = Array.from(
+      new Set(
+        (Array.isArray(task.predecessors) ? task.predecessors : [])
+          .map(p => String(p || '').trim())
+          .filter(Boolean)
+      )
+    );
     setFormData({
       id: task.id,
       name: task.name,
       duration: String(task.duration),
       laborIntensity: String(task.laborIntensity ?? ''),
       numberOfPerformers: String(task.numberOfPerformers),
-      predecessors: task.predecessors.join(', ')
+      predecessors: existingPreds.join(', ')
     });
+    setPredecessorSelections(existingPreds.length > 0 ? existingPreds : ['']);
     setEditingTask(task);
     setMissingReq([]);
     setFormError(''); 
@@ -190,6 +257,7 @@ const TaskInput = ({
       numberOfPerformers: '1',
       predecessors: ''
     });
+    setPredecessorSelections(['']);
     setMissingReq([]);
     setFormError(''); 
   };
@@ -234,7 +302,9 @@ const TaskInput = ({
             </p>
           ) : (
             <div className="space-y-3 max-h-[600px] overflow-y-auto">
-              {tasks.map((task) => (
+              {tasks.map((task) => {
+                const visiblePredecessors = getVisiblePredecessors(task);
+                return (
                 <div
                   key={task.id}
                   className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
@@ -251,7 +321,7 @@ const TaskInput = ({
                       <div>Длительность: {task.duration} дн.</div>
                       <div>Трудоемкость: {task.laborIntensity} н-ч</div>
                       <div>Исполнители: {task.numberOfPerformers} чел.</div>
-                      <div>Предшественники: {task.predecessors.length > 0 ? task.predecessors.join(', ') : 'нет'}</div>
+                      <div>Предшественники: {visiblePredecessors.length > 0 ? visiblePredecessors.join(', ') : 'нет'}</div>
                     </div>
                   </div>
                   <div className="flex flex-col gap-2">
@@ -263,7 +333,7 @@ const TaskInput = ({
                     </Button>
                   </div>
                 </div>
-              ))}
+              )})}
             </div>
           )}
         </CardContent>
@@ -331,7 +401,7 @@ const TaskInput = ({
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="hoursPerDay">Рабочий день (часы)</Label>
+              <Label htmlFor="hoursPerDay">Рабочий день (часы, глобально для проекта)</Label>
               <div className="flex items-center gap-3">
                 <input
                   id="hoursPerDay"
@@ -353,19 +423,9 @@ const TaskInput = ({
                   className="h-8 w-20"
                 />
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="anchoringMode">Якорение фаз</Label>
-              <select
-                id="anchoringMode"
-                value={anchoringMode}
-                onChange={(e) => onAnchoringModeChange(e.target.value)}
-                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-              >
-                <option value="legacy">Вариант 1 (старый)</option>
-                <option value="two-pass">Вариант 2 (двупроходный)</option>
-              </select>
+              <p className="text-xs text-muted-foreground">
+                Влияет на расчет всех работ проекта, а не на одну выбранную задачу.
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -436,11 +496,23 @@ const TaskInput = ({
                     variant="secondary"
                     size="sm"
                     onClick={() => {
-                      const list = missingReq
-                        .map(x => x?.id ?? x?.code ?? x?.name) 
-                        .filter(Boolean) 
-                        .map(String); 
-                      setFormData(f => ({ ...f, predecessors: list.join(', ') }));
+                      const list = Array.from(new Set(
+                        missingReq
+                          .map(x => x?.id ?? x?.code ?? x?.name)
+                          .filter(Boolean)
+                          .map(String)
+                          .map(x => x.trim())
+                          .filter(Boolean)
+                      ));
+                      const filtered = list.filter(id => availablePredecessorIdSet.has(id));
+                      const limited = filtered.slice(0, MAX_PREDECESSORS);
+                      setPredecessorSelections(limited.length > 0 ? limited : ['']);
+                      setFormData(f => ({ ...f, predecessors: limited.join(', ') }));
+                      if (filtered.length > MAX_PREDECESSORS) {
+                        setFormError(`Можно указать не более ${MAX_PREDECESSORS} предшественников.`);
+                      } else {
+                        setFormError('');
+                      }
                     }}
                   >
                     Подставить в поле «Предшественники»
@@ -468,6 +540,7 @@ const TaskInput = ({
                 value={formData.duration}
                 onChange={(e) => handleInputChange('duration', e.target.value)}
                 placeholder="10"
+                disabled={!isTaskIdentityReady}
               />
             </div>
 
@@ -481,6 +554,7 @@ const TaskInput = ({
                 value={formData.laborIntensity}
                 onChange={(e) => handleInputChange('laborIntensity', e.target.value)}
                 placeholder="80"
+                disabled={!isTaskIdentityReady}
               />
             </div>
 
@@ -493,21 +567,121 @@ const TaskInput = ({
                 value={formData.numberOfPerformers}
                 onChange={(e) => handleInputChange('numberOfPerformers', e.target.value)}
                 placeholder="2"
+                disabled={!isTaskIdentityReady}
               />
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="predecessors">Предшественники</Label>
-              <Input
-                id="predecessors"
-                value={formData.predecessors}
-                onChange={(e) => handleInputChange('predecessors', e.target.value)}
-                placeholder="1-2, 1-3"
-              />
+              <div id="predecessors" className="space-y-2">
+                {predecessorSelections.map((selectedValue, rowIndex) => {
+                  const selectedInOtherRows = new Set(
+                    predecessorSelections
+                      .map((value, index) => index === rowIndex ? '' : String(value || '').trim())
+                      .filter(Boolean)
+                  );
+                  const optionsForRow = availablePredecessorOptions
+                    .filter(task => task.id === selectedValue || !selectedInOtherRows.has(task.id));
+                  const hasLegacyValue = selectedValue && !optionsForRow.some(task => task.id === selectedValue);
+                  return (
+                    <div key={`pred-row-${rowIndex}`} className="flex items-center gap-2">
+                      <select
+                        value={selectedValue}
+                        onChange={(e) => {
+                          const nextValue = String(e.target.value || '').trim();
+                          const duplicateInOtherRows = predecessorSelections
+                            .some((value, index) => index !== rowIndex && String(value || '').trim() === nextValue);
+                          if (duplicateInOtherRows) {
+                            setFormError('Нельзя выбрать одного и того же предшественника несколько раз.');
+                            return;
+                          }
+                          const next = [...predecessorSelections];
+                          next[rowIndex] = nextValue;
+                          const normalized = next.map(value => String(value || '').trim());
+                          setPredecessorSelections(normalized);
+                          setFormData(prev => ({
+                            ...prev,
+                            predecessors: normalized.filter(Boolean).join(', ')
+                          }));
+                          setFormError('');
+                        }}
+                        className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                        disabled={!isTaskIdentityReady}
+                      >
+                        <option value="">Без предшественника</option>
+                        {hasLegacyValue && (
+                          <option value={selectedValue}>
+                            {selectedValue} (недоступно)
+                          </option>
+                        )}
+                        {optionsForRow.map(task => (
+                          <option key={`pred-opt-${rowIndex}-${task.id}`} value={task.id}>
+                            {task.id} - {task.name}
+                          </option>
+                        ))}
+                      </select>
+                      {predecessorSelections.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                        onClick={() => {
+                          const next = predecessorSelections.filter((_, i) => i !== rowIndex);
+                          const normalized = (next.length > 0 ? next : ['']).map(value => String(value || '').trim());
+                          setPredecessorSelections(normalized);
+                          setFormData(prev => ({
+                            ...prev,
+                            predecessors: normalized.filter(Boolean).join(', ')
+                          }));
+                          setFormError('');
+                        }}
+                        disabled={!isTaskIdentityReady}
+                      >
+                        -
+                      </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setPredecessorSelections(prev => [...prev, '']);
+                    setFormError('');
+                  }}
+                  disabled={!isTaskIdentityReady || !canAddPredecessorRow}
+                >
+                  + Добавить предшественника
+                </Button>
+                {hasEmptyPredecessorSelection && (
+                  <span className="text-xs text-muted-foreground">
+                    Сначала выберите значение в текущем поле.
+                  </span>
+                )}
+                {!hasEmptyPredecessorSelection && selectedPredecessors.length >= MAX_PREDECESSORS && (
+                  <span className="text-xs text-muted-foreground">
+                    Достигнут лимит: не более {MAX_PREDECESSORS} предшественников.
+                  </span>
+                )}
+              </div>
+              {editingTaskIndex >= 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Для редактирования доступны только задачи, расположенные выше в списке.
+                </p>
+              )}
+              {!isTaskIdentityReady && (
+                <p className="text-xs text-muted-foreground">
+                  Сначала выберите задачу из подсказок или введите вручную ID и название.
+                </p>
+              )}
             </div>
 
             <div className="flex gap-2">
-              <Button type="submit" className="flex-1">
+              <Button type="submit" className="flex-1" disabled={!isTaskIdentityReady}>
                 {editingTask ? 'Сохранить изменения' : 'Добавить работу'}
               </Button>
               {editingTask && (

@@ -23,6 +23,7 @@ import { format, addDays, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
 const GanttChart = forwardRef(({ results, project }, ref) => {
+  const [history, setHistory] = useState([]);
   const [showCriticalPath, setShowCriticalPath] = useState(true);
   const [showTimeScale, setShowTimeScale] = useState(true);
   const [showResources, setShowResources] = useState(true);
@@ -31,9 +32,24 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [scrollOffset, setScrollOffset] = useState({ x: 0, y: 0 });
+  // Локальная копия задач, которую мы сможем изменять
+const [localTasks, setLocalTasks] = useState([]);
+// Состояние перетаскивания: какую задачу тянем и откуда начали
+const [dragInfo, setDragInfo] = useState({ taskId: null, startX: 0, originalStart: 0 });
+
+// Постоянная высота графика ресурсов
+const RESOURCE_CHART_HEIGHT = 150; 
+
+// Синхронизируем локальные задачи с входящими данными при загрузке
+useEffect(() => {
+  if (results?.tasks) {
+    setLocalTasks(JSON.parse(JSON.stringify(results.tasks)));
+  }
+}, [results]);
   
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
+  const isDraggingRef = useRef(false); // Будет true только когда ЛКМ зажата над задачей
   const animationFrameRef = useRef(null);
   
  useImperativeHandle(ref, () => ({
@@ -117,31 +133,76 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
 
 
   const handleMouseDown = useCallback((e) => {
-    if (e.button === 0) { 
-      setIsPanning(true);
-      setPanStart({ x: e.clientX, y: e.clientY });
-      e.preventDefault();
-    }
-  }, []);
+  const rect = canvasRef.current.getBoundingClientRect();
+  const mouseX = (e.clientX - rect.left - scrollOffset.x);
+  const mouseY = (e.clientY - rect.top - scrollOffset.y);
+
+  const clickedTaskIndex = localTasks.findIndex((task, index) => {
+    const y = HEADER_HEIGHT + index * ROW_HEIGHT + TASK_MARGIN;
+    const xStart = LABEL_WIDTH + (task.earlyStart || 0) * DAY_WIDTH * scale;
+    const xEnd = xStart + task.duration * DAY_WIDTH * scale;
+    return mouseY >= y && mouseY <= y + TASK_HEIGHT && mouseX >= xStart && mouseX <= xEnd;
+  });
+
+  if (clickedTaskIndex !== -1) {
+    // ПЕРЕД тем как начать двигать, сохраняем текущее (еще старое) состояние в историю
+    const currentState = JSON.stringify(localTasks);
+    setHistory(prev => [...prev, currentState]);
+
+    const task = localTasks[clickedTaskIndex];
+    isDraggingRef.current = true;
+    setDragInfo({
+      taskId: task.id,
+      startX: e.clientX,
+      originalStart: task.earlyStart
+    });
+  } else {
+    setIsPanning(true);
+    setPanStart({ x: e.clientX, y: e.clientY });
+  }
+}, [localTasks, scrollOffset, scale]);
 
   const handleMouseMove = useCallback((e) => {
-    if (isPanning) {
-      const deltaX = e.clientX - panStart.x;
-      const deltaY = e.clientY - panStart.y;
-      
-      setScrollOffset(prev => ({
-        x: prev.x + deltaX,
-        y: prev.y + deltaY
-      }));
-      
-      setPanStart({ x: e.clientX, y: e.clientY });
-    }
-  }, [isPanning, panStart]);
+  // Если флаг снят — ПРЕРЫВАЕМ выполнение сразу
+  if (!isDraggingRef.current && !isPanning) return;
+
+  if (isDraggingRef.current && dragInfo.taskId) {
+    const deltaX = e.clientX - dragInfo.startX;
+    const daysDelta = Math.round(deltaX / (DAY_WIDTH * scale));
+    
+    // Используем функциональное обновление, чтобы не зависеть от localTasks в массиве зависимостей
+    setLocalTasks(prev => {
+      return prev.map(task => {
+        if (task.id === dragInfo.taskId) {
+          const originalTask = results.tasks.find(t => t.id === task.id);
+          const maxReserve = originalTask.totalFloat || 0;
+          let newStart = dragInfo.originalStart + daysDelta;
+          newStart = Math.max(originalTask.earlyStart, Math.min(newStart, originalTask.earlyStart + maxReserve));
+          const newTotalFloat = maxReserve - (newStart - originalTask.earlyStart);
+          
+          if (task.earlyStart === newStart) return task;
+          return { ...task, earlyStart: newStart, totalFloat: newTotalFloat };
+        }
+        return task;
+      });
+    });
+  } else if (isPanning) {
+    const deltaX = e.clientX - panStart.x;
+    const deltaY = e.clientY - panStart.y;
+    setScrollOffset(prev => ({ x: prev.x + deltaX, y: prev.y + deltaY }));
+    setPanStart({ x: e.clientX, y: e.clientY });
+  }
+}, [dragInfo, isPanning, panStart, scale, results.tasks]);
 
   const handleMouseUp = useCallback(() => {
-    setIsPanning(false);
-  }, []);
-
+  // Если мы закончили тащить, но ничего не изменилось (просто кликнули)
+  // можно было бы удалить последний шаг из истории, но для простоты 
+  // оставим так — это не критично.
+  
+  isDraggingRef.current = false;
+  setDragInfo({ taskId: null, startX: 0, originalStart: 0 });
+  setIsPanning(false);
+}, []); // Зависимости теперь не нужны
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas) {
@@ -172,7 +233,53 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [tasks, showCriticalPath, showTimeScale, showResources, showTimeReserves, scale, scrollOffset]);
+  }, [localTasks, showCriticalPath, showTimeScale, showResources, showTimeReserves, scale, scrollOffset]);
+
+const drawResourceChart = (ctx, chartWidth, totalHeight) => {
+  const startY = totalHeight - RESOURCE_CHART_HEIGHT;
+  const startX = LABEL_WIDTH;
+  const dayWidth = DAY_WIDTH * scale;
+
+  // 1. Считаем загрузку по дням
+  const resourceUsage = new Array(Math.ceil(projectDuration) + 1).fill(0);
+  localTasks.forEach(task => {
+    const start = Math.floor(task.earlyStart);
+    const end = Math.floor(task.earlyStart + task.duration);
+    for (let i = start; i < end; i++) {
+      if (i >= 0 && i < resourceUsage.length) {
+        resourceUsage[i] += (task.numberOfPerformers || 0);
+      }
+    }
+  });
+
+  const maxPeople = Math.max(...resourceUsage, 5); // Минимум 5 для масштаба
+
+  // 2. Рисуем фон графика
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(startX, startY, chartWidth - startX, RESOURCE_CHART_HEIGHT);
+
+  // 3. Рисуем столбики
+  resourceUsage.forEach((count, day) => {
+    const barHeight = (count / maxPeople) * (RESOURCE_CHART_HEIGHT - 40);
+    const x = startX + day * dayWidth;
+    const y = totalHeight - barHeight - 20;
+
+    ctx.fillStyle = count > 10 ? '#ef4444' : '#3b82f6'; // Красный, если людей > 10
+    ctx.fillRect(x + 2, y, dayWidth - 4, barHeight);
+
+    // Подпись количества людей сверху столбика
+    if (dayWidth > 20 && count > 0) {
+      ctx.fillStyle = '#1e293b';
+      ctx.font = '10px sans-serif';
+      ctx.fillText(count, x + dayWidth/2, y - 5);
+    }
+  });
+  
+  // Заголовок
+  ctx.fillStyle = '#1f2937';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.fillText('Загрузка ресурсов (чел.)', 15, startY + 25);
+};
 
   const drawGanttChart = () => {
     const canvas = canvasRef.current;
@@ -185,7 +292,7 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
     const containerWidth = container.offsetWidth;
     const containerHeight = container.offsetHeight;
     const chartWidth = Math.max(containerWidth, LABEL_WIDTH + projectDuration * DAY_WIDTH * scale);
-    const chartHeight = Math.max(containerHeight, HEADER_HEIGHT + tasks.length * ROW_HEIGHT);
+    const chartHeight = Math.max(containerHeight, HEADER_HEIGHT + localTasks.length * ROW_HEIGHT + RESOURCE_CHART_HEIGHT);
 
    
     const dpr = window.devicePixelRatio || 1;
@@ -212,16 +319,17 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
     }
 
   
-    drawGrid(ctx, chartWidth, chartHeight);
-
-   
-    tasks.forEach((task, index) => {
+    
+    
+    
+    localTasks.forEach((task, index) => {
       drawTask(ctx, task, index, chartWidth);
     });
-
+    
    
     drawBorders(ctx, chartWidth, chartHeight);
-
+    drawResourceChart(ctx, chartWidth, chartHeight);
+    drawGrid(ctx, chartWidth, chartHeight);
     ctx.restore();
   };
 
@@ -421,26 +529,34 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
   };
 
   const drawGrid = (ctx, chartWidth, chartHeight) => {
-    ctx.strokeStyle = GRID_COLOR;
-    ctx.lineWidth = 1;
-
-   
-    const startX = LABEL_WIDTH;
-    const dayWidth = DAY_WIDTH * scale;
+  const startX = LABEL_WIDTH;
+  const dayWidth = DAY_WIDTH * scale;
+  
+  for (let day = 0; day <= projectDuration; day++) {
+    const x = startX + day * dayWidth;
+    if (x > chartWidth + Math.abs(scrollOffset.x)) break;
+    if (x < -Math.abs(scrollOffset.x)) continue;
     
-    for (let day = 0; day <= projectDuration; day++) {
-      const x = startX + day * dayWidth;
-      if (x > chartWidth + Math.abs(scrollOffset.x)) break;
-      if (x < -Math.abs(scrollOffset.x)) continue;
-      
-      ctx.strokeStyle = day % 5 === 0 ? '#cbd5e1' : GRID_COLOR;
-      ctx.lineWidth = day % 5 === 0 ? 1 : 0.5;
-      ctx.beginPath();
-      ctx.moveTo(x, HEADER_HEIGHT);
-      ctx.lineTo(x, chartHeight);
-      ctx.stroke();
-    }
-  };
+    // Определяем стиль линии (каждые 5 дней линия чуть темнее)
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = day % 5 === 0 ? 1 : 0.5;
+
+    ctx.beginPath();
+    
+    // --- НОВАЯ ЛОГИКА ПУНКТИРА ---
+    // Устанавливаем пунктир: 5px штрих, 5px пустота
+    ctx.setLineDash([5, 5]); 
+    
+    ctx.moveTo(x, HEADER_HEIGHT);
+    ctx.lineTo(x, chartHeight);
+    ctx.stroke();
+    
+    // СБРОС: Важно сбросить пунктир в [] сразу после stroke, 
+    // чтобы прямоугольники работ не стали пунктирными!
+    ctx.setLineDash([]); 
+    // -----------------------------
+  }
+};
 
   const drawBorders = (ctx, chartWidth, chartHeight) => {
     
@@ -641,8 +757,58 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
     setScrollOffset({ x: 0, y: 0 });
   };
 
+  // Функция "Шаг назад"
+const handleUndo = useCallback(() => {
+  if (history.length === 0) return;
+
+  // Берем последний "снимок" (это состояние ДО последнего движения)
+  const previousStateRaw = history[history.length - 1];
+  
+  // Применяем его
+  setLocalTasks(JSON.parse(previousStateRaw));
+  
+  // Удаляем этот снимок из истории, так как мы его уже использовали
+  setHistory(prev => prev.slice(0, -1));
+}, [history]);
+
+// Функция "Сброс всех изменений"
+const handleReset = useCallback(() => {
+  if (window.confirm("Вы уверены, что хотите сбросить все ручные изменения к исходному расчету?")) {
+    // Возвращаем данные из исходного пропса results
+    setLocalTasks(JSON.parse(JSON.stringify(results.tasks)));
+    setHistory([]);
+  }
+}, [results.tasks]);
+
   return (
     <div className="space-y-4">
+      <div className="flex items-center gap-4 p-3 bg-slate-50 border-b border-slate-200">
+      <div className="flex bg-white border border-slate-300 rounded overflow-hidden">
+        <button
+  onClick={handleUndo}
+  disabled={history.length === 0}
+  className={`px-4 py-2 text-sm flex items-center gap-2 transition-colors rounded-l border-r ${
+    history.length === 0 
+      ? 'bg-slate-50 text-slate-400 cursor-not-allowed border-slate-200' 
+      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
+  }`}
+>
+  <span>↩️</span> Шаг назад
+</button>
+      </div>
+
+      <button
+        onClick={handleReset}
+        className="px-4 py-2 text-sm font-medium text-red-600 bg-white border border-red-200 rounded hover:bg-red-50 transition-colors flex items-center gap-2"
+      >
+        <span>🗑️</span> Сбросить все изменения
+      </button>
+      
+      {/* Здесь можно оставить ваши старые кнопки масштаба, если они были */}
+      <div className="text-xs text-slate-500 ml-auto">
+        Перетаскивайте синие полоски в пределах резерва
+      </div>
+    </div>
       <div className="flex justify-between items-center">
         <CardTitle>Диаграмма Ганта</CardTitle>
         <div className="flex items-center space-x-2">

@@ -28,9 +28,9 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 
 import GostViewer from './components/GostViewer';
@@ -68,7 +68,6 @@ function App() {
   const [resourceLimit, setResourceLimit] = useState(10);
   const [lastNumericLimit, setLastNumericLimit] = useState(10); 
   const [hoursPerDay, setHoursPerDay] = useState(8);
-  const [anchoringMode, setAnchoringMode] = useState('legacy');
   const maxPerformersPerTask = project.tasks.reduce((max, task) => Math.max(max, task.numberOfPerformers), 0);
   const isResourceLimitExceeded = maxPerformersPerTask > resourceLimit;
 
@@ -89,6 +88,12 @@ function App() {
   const [isTabsOverflowing, setIsTabsOverflowing] = useState(false);
   const [isTabsAtStart, setIsTabsAtStart] = useState(true);
   const [isTabsAtEnd, setIsTabsAtEnd] = useState(false);
+  const [missingDepsDialogOpen, setMissingDepsDialogOpen] = useState(false);
+  const [missingDepsInfo, setMissingDepsInfo] = useState({ missingIds: [], usage: [], byTask: [] });
+  const [currentMissingTaskIndex, setCurrentMissingTaskIndex] = useState(0);
+  const [manualPredecessorSelections, setManualPredecessorSelections] = useState(['']);
+  const [missingDepsDialogError, setMissingDepsDialogError] = useState('');
+  const [isResolvingMissingDeps, setIsResolvingMissingDeps] = useState(false);
 
   const updateTabsScrollState = () => {
     const el = tabsListRef.current;
@@ -142,12 +147,6 @@ function App() {
     setBaselinePlan(null);
     setValidationErrors([]);
   }, [hoursPerDay, project.tasks]);
-
-  useEffect(() => {
-    setCalculationResults(null);
-    setBaselinePlan(null);
-    setValidationErrors([]);
-  }, [anchoringMode]);
 
   useEffect(() => {
     const el = tabsListRef.current;
@@ -505,22 +504,290 @@ function App() {
     if (idx === 1) return handleLoadRequiredFromDB();
   };
 
+  const normalizePredecessors = (task) => {
+    if (Array.isArray(task?.predecessors)) {
+      return task.predecessors.map(p => String(p).trim()).filter(Boolean);
+    }
+    if (typeof task?.predecessors === 'string' && task.predecessors.trim()) {
+      return task.predecessors
+        .split(',')
+        .map(p => String(p).trim())
+        .filter(Boolean);
+    }
+    return [];
+  };
 
-  const handleCalculate = async () => {
-  setIsCalculating(true);
+  const getTaskOrderIndexMap = (tasks) => {
+    const map = new Map();
+    (Array.isArray(tasks) ? tasks : []).forEach((task, index) => {
+      const id = String(task?.id ?? '').trim();
+      if (id && !map.has(id)) map.set(id, index);
+    });
+    return map;
+  };
+
+  const findPredecessorOrderViolations = (tasks) => {
+    const list = Array.isArray(tasks) ? tasks : [];
+    const indexMap = getTaskOrderIndexMap(list);
+    const errors = [];
+
+    list.forEach((task, taskIndex) => {
+      const taskId = String(task?.id ?? '').trim();
+      if (!taskId) return;
+      const badPreds = normalizePredecessors(task)
+        .filter(predId => indexMap.has(predId) && indexMap.get(predId) >= taskIndex);
+      if (badPreds.length > 0) {
+        errors.push(`Для задачи ${taskId} предшественники должны быть выше по списку: ${badPreds.join(', ')}`);
+      }
+    });
+
+    return errors;
+  };
+
+  const getMissingPredecessorInfo = (tasks) => {
+    const list = Array.isArray(tasks) ? tasks : [];
+    const existingIds = new Set(
+      list
+        .map(t => String(t?.id ?? '').trim())
+        .filter(Boolean)
+    );
+    const usageMap = new Map();
+    const byTask = [];
+
+    list.forEach(task => {
+      const taskId = String(task?.id ?? '').trim();
+      if (!taskId) return;
+      const predecessors = normalizePredecessors(task);
+      const existingForTask = [];
+      const missingForTask = [];
+      predecessors.forEach(predId => {
+        if (existingIds.has(predId)) {
+          existingForTask.push(predId);
+          return;
+        }
+        missingForTask.push(predId);
+      });
+      const uniqueExisting = Array.from(new Set(existingForTask));
+      const uniqueMissing = Array.from(new Set(missingForTask));
+      if (uniqueMissing.length > 0 && uniqueExisting.length === 0) {
+        uniqueMissing.forEach(predId => {
+          if (!usageMap.has(predId)) usageMap.set(predId, new Set());
+          usageMap.get(predId).add(taskId);
+        });
+        byTask.push({
+          taskId,
+          taskName: String(task?.name ?? ''),
+          missingIds: uniqueMissing,
+        });
+      }
+    });
+
+    const missingIds = Array.from(usageMap.keys()).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    );
+
+    return {
+      missingIds,
+      usage: missingIds.map(id => ({
+        id,
+        usedBy: Array.from(usageMap.get(id) || []).sort((a, b) =>
+          a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+        ),
+      })),
+      byTask,
+    };
+  };
+
+  const applyManualPredecessorMappingForTask = (tasks, targetTaskId, selectedPredecessors) => {
+    const list = Array.isArray(tasks) ? tasks : [];
+    const orderIndexMap = getTaskOrderIndexMap(list);
+    const idPool = new Set(orderIndexMap.keys());
+    const targetIndex = orderIndexMap.get(targetTaskId);
+
+    if (!Number.isInteger(targetIndex)) {
+      return { ok: false, reason: 'target_not_found', tasks };
+    }
+
+    const manualSelected = (Array.isArray(selectedPredecessors) ? selectedPredecessors : [])
+      .map(id => String(id || '').trim())
+      .filter(Boolean);
+
+    if (manualSelected.length === 0) {
+      return { ok: false, reason: 'at_least_one_required', tasks };
+    }
+
+    const mappedTasks = list.map(task => {
+      const taskId = String(task?.id ?? '').trim();
+      if (taskId !== targetTaskId) return task;
+
+      const originalPreds = normalizePredecessors(task);
+      const preservedExisting = originalPreds.filter(predId =>
+        idPool.has(predId) && predId !== taskId && orderIndexMap.get(predId) < targetIndex
+      );
+      const manualResolved = manualSelected
+        .filter(predId =>
+          idPool.has(predId) && predId !== taskId && orderIndexMap.get(predId) < targetIndex
+        );
+
+      return {
+        ...task,
+        predecessors: Array.from(new Set([...preservedExisting, ...manualResolved])),
+      };
+    });
+
+    return { ok: true, reason: '', tasks: mappedTasks };
+  };
+
+  const openMissingDepsResolver = (info, errorMessage = '', preferredTaskId = null) => {
+    const byTask = Array.isArray(info?.byTask) ? info.byTask : [];
+    const fallbackIndex = 0;
+    const preferredIndex = preferredTaskId
+      ? byTask.findIndex(item => item.taskId === preferredTaskId)
+      : -1;
+    const nextIndex = preferredIndex >= 0 ? preferredIndex : fallbackIndex;
+    const currentTask = byTask[nextIndex] || null;
+
+    setManualPredecessorSelections(['']);
+    setMissingDepsInfo(info);
+    setCurrentMissingTaskIndex(nextIndex);
+    setMissingDepsDialogError(errorMessage);
+    setMissingDepsDialogOpen(true);
+  };
+
+  const handleApplyManualMappingAndCalculate = async () => {
+    setIsResolvingMissingDeps(true);
+    setMissingDepsDialogError('');
+
+    try {
+      const sourceTasks = Array.isArray(project.tasks) ? project.tasks : [];
+      const currentTask = (missingDepsInfo.byTask || [])[currentMissingTaskIndex];
+      const currentTaskId = currentTask?.taskId || '';
+      const currentMissingIds = currentTask?.missingIds || [];
+
+      if (!currentTaskId || currentMissingIds.length === 0) {
+        setMissingDepsDialogOpen(false);
+        return;
+      }
+
+      const orderIndexMap = getTaskOrderIndexMap(sourceTasks);
+      const currentIndex = orderIndexMap.get(currentTaskId);
+      if (!Number.isInteger(currentIndex)) {
+        setMissingDepsDialogError('Не удалось определить позицию текущей задачи в списке.');
+        return;
+      }
+
+      const idPool = new Set(orderIndexMap.keys());
+      const selectedEntries = manualPredecessorSelections
+        .map(value => String(value || '').trim())
+        .filter(Boolean);
+      const uniqueSelectedEntries = Array.from(new Set(selectedEntries));
+      const maxAllowedPredecessors = Math.min(Math.max(currentIndex, 0), 4);
+
+      if (maxAllowedPredecessors === 0) {
+        setMissingDepsDialogError('Для текущей задачи нет допустимых предшественников выше по списку. Измените порядок задач в списке.');
+        return;
+      }
+
+      if (uniqueSelectedEntries.length > maxAllowedPredecessors) {
+        setMissingDepsDialogError(
+          `Можно выбрать не более ${maxAllowedPredecessors} предшественников для текущей задачи.`
+        );
+        return;
+      }
+
+      if (selectedEntries.length === 0) {
+        setMissingDepsDialogError('Выберите вручную хотя бы одного предшественника для текущей задачи.');
+        return;
+      }
+
+      if (selectedEntries.length !== uniqueSelectedEntries.length) {
+        setMissingDepsDialogError('Нельзя выбирать одного и того же предшественника несколько раз.');
+        return;
+      }
+
+      const invalidTargets = selectedEntries
+        .filter(targetId => {
+          const targetIndex = orderIndexMap.get(targetId);
+          return !idPool.has(targetId) || targetId === currentTaskId || !Number.isInteger(targetIndex) || targetIndex >= currentIndex;
+        })
+        .map(targetId => targetId);
+
+      if (invalidTargets.length > 0) {
+        setMissingDepsDialogError(
+          `Выберите корректные работы выше текущей задачи. Некорректный выбор: ${invalidTargets.join(', ')}`
+        );
+        return;
+      }
+
+      const mapped = applyManualPredecessorMappingForTask(
+        sourceTasks,
+        currentTaskId,
+        uniqueSelectedEntries
+      );
+
+      if (!mapped.ok) {
+        if (mapped.reason === 'at_least_one_required') {
+          setMissingDepsDialogError('Выберите вручную хотя бы одного предшественника для текущей задачи.');
+        } else if (mapped.reason === 'target_not_found') {
+          setMissingDepsDialogError('Текущая задача не найдена в списке работ.');
+        } else {
+          setMissingDepsDialogError('Не удалось применить ручной выбор для текущей задачи.');
+        }
+        return;
+      }
+
+      setProject(prev => ({ ...prev, tasks: mapped.tasks }));
+      setCalculationResults(null);
+      setValidationErrors([]);
+
+      const remaining = getMissingPredecessorInfo(mapped.tasks);
+      if (remaining.missingIds.length > 0) {
+        openMissingDepsResolver(remaining);
+        return;
+      }
+
+      setMissingDepsDialogOpen(false);
+      await handleCalculate({ skipMissingDependencyCheck: false, tasksOverride: mapped.tasks });
+    } finally {
+      setIsResolvingMissingDeps(false);
+    }
+  };
+
+  const handleCalculate = async ({ skipMissingDependencyCheck = false, tasksOverride = null } = {}) => {
   setValidationErrors([]);
+
+  const sourceTasks = Array.isArray(tasksOverride) ? tasksOverride : (Array.isArray(project.tasks) ? project.tasks : []);
+  if (!skipMissingDependencyCheck) {
+    const missingInfo = getMissingPredecessorInfo(sourceTasks);
+    if (missingInfo.missingIds.length > 0) {
+      openMissingDepsResolver(missingInfo);
+      return;
+    }
+  }
+
+  const orderErrors = findPredecessorOrderViolations(sourceTasks);
+  if (orderErrors.length > 0) {
+    setValidationErrors(orderErrors);
+    logger.logCalculationError(new Error('Predecessor order validation failed'), {
+      errors: orderErrors,
+      tasksCount: sourceTasks.length,
+    });
+    setActiveTab('input');
+    return;
+  }
+
+  setIsCalculating(true);
 
   try { 
     logger.logUserAction('START_CALCULATION', {
-      tasksCount: project.tasks.length,
+      tasksCount: sourceTasks.length,
       projectId: project.id
     });
 
-    const source = Array.isArray(project.tasks) ? project.tasks : [];
-    const needsAdapt = source.some(t => !looksLikeEdgeId(String(t.id)));
+    const needsAdapt = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)));
     const tasksForCalc = needsAdapt
-      ? aonToAoa(source, { hoursPerDay, createSink: true, anchoringMode })
-      : source;
+      ? aonToAoa(sourceTasks, { hoursPerDay, createSink: true })
+      : sourceTasks;
     const normalizedTasks = tasksForCalc.map(t => {
       const p = Math.max(1, parseInt(t.numberOfPerformers, 10) || 1);
       const isDummy = t.isDummy === true || Number(t.duration) === 0;
@@ -572,7 +839,7 @@ function App() {
     if (!baselinePlan) {
     
       const snapshot = {
-        tasks: JSON.parse(JSON.stringify(project.tasks)), 
+        tasks: JSON.parse(JSON.stringify(sourceTasks)), 
         results: JSON.parse(JSON.stringify(result)),      
     
         networkImage: null,
@@ -596,7 +863,7 @@ function App() {
       if (userChoice) {
       
         const snapshot = {
-          tasks: JSON.parse(JSON.stringify(project.tasks)),
+          tasks: JSON.parse(JSON.stringify(sourceTasks)),
           results: JSON.parse(JSON.stringify(result)),
           networkImage: null,
           ganttImage: null,
@@ -632,7 +899,7 @@ function App() {
   } catch (error) {
     setValidationErrors([error.message]);
     logger.logCalculationError(error, {
-      tasksCount: project.tasks.length,
+      tasksCount: sourceTasks.length,
       projectId: project.id
     });
   } finally {
@@ -784,6 +1051,35 @@ function App() {
     setShowRecoveryDialog(false);
     logger.logUserAction('DISCARD_AUTOSAVED_DATA');
   };
+
+  const missingTaskQueue = Array.isArray(missingDepsInfo.byTask) ? missingDepsInfo.byTask : [];
+  const activeMissingTask = missingTaskQueue[currentMissingTaskIndex] || null;
+  const activeMissingIds = activeMissingTask?.missingIds || [];
+  const activeTaskOrderIndex = (() => {
+    const map = getTaskOrderIndexMap(project.tasks);
+    return activeMissingTask ? map.get(activeMissingTask.taskId) : -1;
+  })();
+  const allowedManualPredecessorOptions = project.tasks
+    .map(task => ({
+      id: String(task?.id ?? '').trim(),
+      name: task?.name,
+    }))
+    .filter((task, index) =>
+      task.id &&
+      index < activeTaskOrderIndex &&
+      !activeMissingIds.includes(task.id) &&
+      task.id !== activeMissingTask?.taskId
+    )
+    .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' }));
+  const maxManualPredecessors = Math.min(
+    Math.max(activeTaskOrderIndex, 0),
+    4,
+    allowedManualPredecessorOptions.length
+  );
+  const hasEmptyManualSelection = manualPredecessorSelections.some(value => !String(value || '').trim());
+  const canAddManualPredecessor = maxManualPredecessors > 0 &&
+    manualPredecessorSelections.length < maxManualPredecessors &&
+    !hasEmptyManualSelection;
 
   return (
     <div className="min-h-screen w-full bg-background text-foreground">
@@ -987,8 +1283,6 @@ function App() {
                 onLastNumericLimitChange={setLastNumericLimit}
                 hoursPerDay={hoursPerDay}
                 onHoursPerDayChange={setHoursPerDay}
-                anchoringMode={anchoringMode}
-                onAnchoringModeChange={setAnchoringMode}
               />
             </TabsContent>
 
@@ -1012,7 +1306,6 @@ function App() {
               <NetworkDiagram
                 ref={networkDiagramRef}
                 results={calculationResults}
-                anchoringMode={anchoringMode}
                 hoursPerDay={hoursPerDay}
               />
             ) : (
@@ -1137,6 +1430,166 @@ function App() {
           </TabsContent>
         </Tabs>
       </div>
+      <Dialog
+        open={missingDepsDialogOpen}
+        onOpenChange={(open) => {
+          if (isResolvingMissingDeps) return;
+          setMissingDepsDialogOpen(open);
+          if (!open) {
+            setMissingDepsDialogError('');
+            setManualPredecessorSelections(['']);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Найдены отсутствующие предшественники</DialogTitle>
+            <DialogDescription>
+              В проекте есть ссылки на предшественников, которых нет в текущем списке работ.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="rounded-md border bg-muted/30 p-3 text-sm">
+              <div className="font-medium">
+                Шаг {Math.min(currentMissingTaskIndex + 1, Math.max(missingTaskQueue.length, 1))} из {Math.max(missingTaskQueue.length, 1)}
+              </div>
+              {activeMissingTask ? (
+                <div className="mt-1">
+                  Обрабатывается задача: <span className="font-medium">{activeMissingTask.taskId}</span>
+                  {activeMissingTask.taskName ? ` (${activeMissingTask.taskName})` : ''}
+                </div>
+              ) : (
+                <div className="mt-1">Нет активной задачи для обработки.</div>
+              )}
+              <div className="mt-1 text-muted-foreground">
+                Для ручного режима достаточно выбрать хотя бы одного предшественника.
+              </div>
+              <div className="mt-1 text-muted-foreground">
+                Для выбора доступны только задачи, расположенные выше текущей. Поля можно добавлять кнопкой "+".
+              </div>
+              <div className="mt-1 text-muted-foreground">
+                Максимум предшественников для ручного выбора: {maxManualPredecessors}.
+              </div>
+            </div>
+
+            <div className="rounded-md border bg-muted/30 p-3 text-sm">
+              {missingDepsInfo.usage
+                .filter(item => activeMissingIds.includes(item.id))
+                .map(item => (
+                <div key={item.id} className="mb-1">
+                  <span className="font-medium">{item.id}</span>
+                  <span className="text-muted-foreground"> используется в: </span>
+                  <span>{item.usedBy.join(', ')}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+              {manualPredecessorSelections.map((selectedValue, rowIndex) => (
+                <div key={`manual-pred-${rowIndex}`} className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-2 items-center">
+                  <div className="text-sm font-medium">Предшественник {rowIndex + 1}</div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={selectedValue}
+                      onChange={(e) => {
+                        const nextValue = String(e.target.value || '').trim();
+                        const duplicateInOtherRow = manualPredecessorSelections
+                          .some((value, index) => index !== rowIndex && String(value || '').trim() === nextValue);
+                        if (duplicateInOtherRow) {
+                          setMissingDepsDialogError('Этот предшественник уже выбран в другом поле.');
+                          return;
+                        }
+                        setMissingDepsDialogError('');
+                        setManualPredecessorSelections(prev => {
+                          const next = [...prev];
+                          next[rowIndex] = nextValue;
+                          return next;
+                        });
+                      }}
+                      className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                      disabled={isResolvingMissingDeps}
+                    >
+                      <option value="">Выберите работу из текущего списка</option>
+                      {allowedManualPredecessorOptions
+                        .filter(task => {
+                          const selectedInOtherRows = new Set(
+                            manualPredecessorSelections
+                              .map((value, index) => index === rowIndex ? '' : String(value || '').trim())
+                              .filter(Boolean)
+                          );
+                          return task.id === selectedValue || !selectedInOtherRows.has(task.id);
+                        })
+                        .map(task => (
+                        <option key={`${rowIndex}:${task.id}`} value={task.id}>
+                          {task.id} - {task.name}
+                        </option>
+                      ))}
+                    </select>
+                    {manualPredecessorSelections.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setManualPredecessorSelections(prev => prev.filter((_, i) => i !== rowIndex))
+                        }
+                        disabled={isResolvingMissingDeps}
+                      >
+                        -
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setManualPredecessorSelections(prev => [...prev, ''])}
+                disabled={isResolvingMissingDeps || !canAddManualPredecessor}
+              >
+                + Добавить предшественника
+              </Button>
+              {hasEmptyManualSelection && maxManualPredecessors > 0 && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Новое поле можно добавить только после заполнения текущего.
+                </div>
+              )}
+            </div>
+
+            {missingDepsDialogError && (
+              <Alert className="border-red-200 bg-red-50">
+                <AlertCircle className="h-4 w-4 text-red-600" />
+                <AlertDescription className="text-red-800">
+                  {missingDepsDialogError}
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setMissingDepsDialogOpen(false)}
+              disabled={isResolvingMissingDeps}
+            >
+              Отмена
+            </Button>
+            <Button
+              type="button"
+              onClick={handleApplyManualMappingAndCalculate}
+              disabled={isResolvingMissingDeps || activeMissingIds.length === 0}
+            >
+              Применить ручной выбор для этой задачи
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
        <UserGuide ref={userGuideRef} />
         <GostViewer open={isGostModalOpen} onOpenChange={setGostModalOpen} />
        {calculationResults && (
@@ -1144,7 +1597,6 @@ function App() {
     <NetworkDiagram
       ref={networkDiagramRef}
       results={calculationResults}
-      anchoringMode={anchoringMode}
       hoursPerDay={hoursPerDay}
     />
     <GanttChart ref={ganttChartRef} results={calculationResults} project={project} />

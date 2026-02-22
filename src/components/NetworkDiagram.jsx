@@ -18,15 +18,17 @@ import {
   Palette
 } from 'lucide-react';
 
-const NetworkDiagram = forwardRef(({ results, anchoringMode = 'legacy', hoursPerDay = 8 }, ref) => {
+const NetworkDiagram = forwardRef(({ results, hoursPerDay = 8 }, ref) => {
   const canvasRef = useRef(null);
   
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [showLabels, setShowLabels] = useState(true);
   const [showTimes, setShowTimes] = useState(true);
+  const [showRegularLabels, setShowRegularLabels] = useState(true);
+  const [showDummyLabels, setShowDummyLabels] = useState(true);
+  const [renderMode, setRenderMode] = useState('aoa');
   const [colorScheme, setColorScheme] = useState('modern');
   const [selectedNode, setSelectedNode] = useState(null);
  
@@ -79,9 +81,7 @@ const drawFullDiagramOnContext = (ctx, width, height, nodes, edges, bgColor) => 
 
     edges.forEach(edge => drawEdge(ctx, edge));
     nodes.forEach(node => drawNode(ctx, node));
-    if (showLabels) {
-        nodes.forEach(node => drawNodeLabel(ctx, node));
-    }
+    nodes.forEach(node => drawNodeLabel(ctx, node));
     
     ctx.restore();
 };
@@ -94,7 +94,7 @@ const exportDiagram = () => {
 
     const sourceTasks = Array.isArray(results.tasks) ? results.tasks : [];
     const aoaTasks = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)))
-      ? converting(sourceTasks, { anchoringMode, hoursPerDay })
+      ? converting(sourceTasks, { hoursPerDay })
       : sourceTasks;
     const nodes = createNodes(aoaTasks);
     const edges = createEdges(aoaTasks, nodes);
@@ -134,7 +134,7 @@ useImperativeHandle(ref, () => ({
 
         const sourceTasks = Array.isArray(results.tasks) ? results.tasks : [];
         const aoaTasks = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)))
-          ? converting(sourceTasks, { anchoringMode, hoursPerDay })
+          ? converting(sourceTasks, { hoursPerDay })
           : sourceTasks;
         const nodes = createNodes(aoaTasks);
         const edges = createEdges(aoaTasks, nodes);
@@ -168,7 +168,7 @@ useImperativeHandle(ref, () => ({
     if (results && results.tasks) {
       drawNetwork();
     }
-  }, [results, scale, offset, showLabels, showTimes, colorScheme]);
+  }, [results, scale, offset, showTimes, colorScheme, renderMode, showRegularLabels, showDummyLabels]);
 
   useEffect(() => {
     const handleWheel = (e) => {
@@ -226,7 +226,7 @@ useImperativeHandle(ref, () => ({
 
     const needsAdapt = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)));
     const aoaTasks = needsAdapt
-      ? converting(sourceTasks, { anchoringMode, hoursPerDay })
+      ? converting(sourceTasks, { hoursPerDay })
       : sourceTasks;
 
     const tasksForRender = aoaTasks.map(t => ({
@@ -235,21 +235,42 @@ useImperativeHandle(ref, () => ({
       isDummy: t.isDummy === true || Number(t.duration ?? 0) === 0
     }));
 
-    const nodes = createNodes(tasksForRender);
-    const edges = createEdges(tasksForRender, nodes).map(e => ({
-      ...e,
-      isDummy: e.task?.isDummy === true
-    }));
+    if (renderMode === 'aon') {
+      const { aonNodes, aonEdges } = buildAONGraph(tasksForRender);
+      positionAONNodes(aonNodes, aonEdges);
+      measureAONNodes(ctx, aonNodes);
 
-    ctx.save();
-    ctx.translate(offset.x, offset.y);
-    ctx.scale(scale, scale);
+      ctx.save();
+      ctx.translate(offset.x, offset.y);
+      ctx.scale(scale, scale);
 
-    edges.forEach(edge => drawEdge(ctx, edge));
-    nodes.forEach(node => drawNode(ctx, node));
-    if (showLabels) nodes.forEach(node => drawNodeLabel(ctx, node));
+      const edgeObjs = aonEdges.map(e => ({
+        ...e,
+        fromNode: aonNodes.find(n => n.id === e.from),
+        toNode: aonNodes.find(n => n.id === e.to),
+      }));
+      prepareAonFinishRoutes(edgeObjs);
+      edgeObjs.forEach(e => drawAonEdge(ctx, e));
+      aonNodes.forEach(n => drawAonNode(ctx, n));
 
-    ctx.restore();
+      ctx.restore();
+    } else {
+      const nodes = createNodes(tasksForRender);
+      const edges = createEdges(tasksForRender, nodes).map(e => ({
+        ...e,
+        isDummy: e.task?.isDummy === true
+      }));
+
+      ctx.save();
+      ctx.translate(offset.x, offset.y);
+      ctx.scale(scale, scale);
+
+      edges.forEach(edge => drawEdge(ctx, edge));
+      nodes.forEach(node => drawNode(ctx, node));
+      nodes.forEach(node => drawNodeLabel(ctx, node));
+
+      ctx.restore();
+    }
 
     drawLegend(ctx, rect.width, rect.height);
   };
@@ -332,36 +353,39 @@ useImperativeHandle(ref, () => ({
   };
 
   const positionNodes = (nodes, tasks) => {
-    const levels = new Map();
-    const visited = new Set();
-    
-    const findLevel = (nodeId, level = 0) => {
-      if (visited.has(nodeId)) return levels.get(nodeId) || 0;
-      
-      visited.add(nodeId);
-      levels.set(nodeId, level);
-      
-      const outgoingTasks = tasks.filter(task => {
-        const [from] = task.id.split('-').map(Number);
-        return from === nodeId;
-      });
-      
-      outgoingTasks.forEach(task => {
-        const [, to] = task.id.split('-').map(Number);
-        findLevel(to, level + 1);
-      });
-      
-      return level;
-    };
+    const levels = new Map(nodes.map(node => [node.id, 0]));
+    const inDeg = new Map(nodes.map(node => [node.id, 0]));
+    const outAdj = new Map(nodes.map(node => [node.id, []]));
+    const edgeList = [];
 
-    const startNodes = nodes.filter(node => {
-      return !tasks.some(task => {
-        const [, to] = task.id.split('-').map(Number);
-        return to === node.id;
-      });
+    tasks.forEach(task => {
+      const [from, to] = String(task.id).split('-').map(Number);
+      if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+      edgeList.push({ from, to });
+      if (outAdj.has(from)) outAdj.get(from).push(to);
+      if (inDeg.has(to)) inDeg.set(to, (inDeg.get(to) || 0) + 1);
     });
 
-    startNodes.forEach(node => findLevel(node.id));
+    const queue = Array.from(inDeg.entries())
+      .filter(([, deg]) => deg === 0)
+      .map(([id]) => id)
+      .sort((a, b) => a - b);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      const currentLevel = levels.get(current) || 0;
+      const outgoing = (outAdj.get(current) || []).slice().sort((a, b) => a - b);
+
+      outgoing.forEach(next => {
+        levels.set(next, Math.max(levels.get(next) || 0, currentLevel + 1));
+        inDeg.set(next, (inDeg.get(next) || 0) - 1);
+        if (inDeg.get(next) === 0) {
+          const pos = queue.findIndex(x => x > next);
+          if (pos === -1) queue.push(next);
+          else queue.splice(pos, 0, next);
+        }
+      });
+    }
 
     const levelGroups = new Map();
     nodes.forEach(node => {
@@ -386,11 +410,7 @@ useImperativeHandle(ref, () => ({
       levelNodes.forEach((node, index) => {
         node.x = baseX + level * levelSpacing;
         node.y = startY + index * nodeSpacing;
-        
-        if (levelNodes.length > 1) {
-          node.y += (Math.random() - 0.5) * 30;
-        }
-        
+
         const relatedTasks = tasks.filter(task => {
           const [from, to] = task.id.split('-').map(Number);
           return from === node.id || to === node.id;
@@ -402,6 +422,26 @@ useImperativeHandle(ref, () => ({
         }
       });
     });
+
+    const sinkTargets = tasks
+      .filter(task =>
+        typeof task?.name === 'string' &&
+        task.name.toLowerCase().includes('слияние в финиш')
+      )
+      .map(task => {
+        const [, to] = String(task.id).split('-').map(Number);
+        return to;
+      })
+      .filter(Number.isFinite);
+    const sinkNodeId = sinkTargets.length > 0 ? Math.max(...sinkTargets) : null;
+    if (Number.isFinite(sinkNodeId)) {
+      const sinkNode = nodes.find(n => n.id === sinkNodeId);
+      if (sinkNode) {
+        const maxLevel = Math.max(...Array.from(levelGroups.keys()), 0);
+        const lastLevel = maxLevel + 1;
+        sinkNode.x = baseX + lastLevel * levelSpacing;
+      }
+    }
 
     optimizeNodePositions(nodes, tasks, levelGroups);
   };
@@ -442,7 +482,7 @@ useImperativeHandle(ref, () => ({
   };
 
   const createEdges = (tasks, nodes) => {
-    return tasks.map(task => {
+    const edges = tasks.map(task => {
       const [from, to] = task.id.split('-').map(Number);
       const fromNode = nodes.find(n => n.id === from);
       const toNode = nodes.find(n => n.id === to);
@@ -457,6 +497,66 @@ useImperativeHandle(ref, () => ({
         isDummy: task.isDummy === true,
       };
     });
+    return addEdgeLanes(edges);
+  };
+
+  const addEdgeLanes = (edges) => {
+    const pairGroups = new Map();
+    const outgoingGroups = new Map();
+    const incomingGroups = new Map();
+
+    edges.forEach(edge => {
+      if (!edge?.from || !edge?.to) return;
+      const pairKey = `${edge.from.id}->${edge.to.id}`;
+      if (!pairGroups.has(pairKey)) pairGroups.set(pairKey, []);
+      pairGroups.get(pairKey).push(edge);
+
+      if (!outgoingGroups.has(edge.from.id)) outgoingGroups.set(edge.from.id, []);
+      outgoingGroups.get(edge.from.id).push(edge);
+
+      if (!incomingGroups.has(edge.to.id)) incomingGroups.set(edge.to.id, []);
+      incomingGroups.get(edge.to.id).push(edge);
+    });
+
+    const rankInGroup = (group, edge, sorter) => {
+      const arr = group.slice().sort(sorter);
+      const idx = arr.findIndex(x => x === edge);
+      const mid = (arr.length - 1) / 2;
+      return (idx - mid);
+    };
+
+    edges.forEach(edge => {
+      if (!edge?.from || !edge?.to) {
+        edge._laneOffset = 0;
+        return;
+      }
+      const pairKey = `${edge.from.id}->${edge.to.id}`;
+      const pair = pairGroups.get(pairKey) || [edge];
+      const pairRank = rankInGroup(pair, edge, (a, b) => {
+        const dummyA = a.isDummy ? 0 : 1;
+        const dummyB = b.isDummy ? 0 : 1;
+        if (dummyA !== dummyB) return dummyA - dummyB;
+        return String(a.task?.name || '').localeCompare(String(b.task?.name || ''));
+      });
+
+      const outgoing = outgoingGroups.get(edge.from.id) || [edge];
+      const outgoingRank = rankInGroup(outgoing, edge, (a, b) => {
+        if ((a.to?.y || 0) !== (b.to?.y || 0)) return (a.to?.y || 0) - (b.to?.y || 0);
+        return (a.to?.id || 0) - (b.to?.id || 0);
+      });
+
+      const incoming = incomingGroups.get(edge.to.id) || [edge];
+      const incomingRank = rankInGroup(incoming, edge, (a, b) => {
+        if ((a.from?.y || 0) !== (b.from?.y || 0)) return (a.from?.y || 0) - (b.from?.y || 0);
+        return (a.from?.id || 0) - (b.from?.id || 0);
+      });
+
+      const pairStep = 18;
+      const fanStep = 7;
+      edge._laneOffset = pairRank * pairStep + (outgoingRank + incomingRank) * fanStep;
+    });
+
+    return edges;
   };
 
   const drawNode = (ctx, node) => {
@@ -522,10 +622,13 @@ useImperativeHandle(ref, () => ({
     const angle = Math.atan2(toY - fromY, toX - fromX);
     const radius = 25;
 
-    const startX = fromX + Math.cos(angle) * radius;
-    const startY = fromY + Math.sin(angle) * radius;
-    const endX   = toX   - Math.cos(angle) * radius;
-    const endY   = toY   - Math.sin(angle) * radius;
+    const laneOffset = Number(edge._laneOffset || 0);
+    const nx = -Math.sin(angle);
+    const ny = Math.cos(angle);
+    const startX = fromX + Math.cos(angle) * radius + nx * laneOffset;
+    const startY = fromY + Math.sin(angle) * radius + ny * laneOffset;
+    const endX   = toX   - Math.cos(angle) * radius + nx * laneOffset;
+    const endY   = toY   - Math.sin(angle) * radius + ny * laneOffset;
 
     const isCrit = edge.isCritical === true;
     const isDummy = edge.isDummy === true;
@@ -542,39 +645,64 @@ useImperativeHandle(ref, () => ({
       ctx.strokeStyle = isCrit ? colors.criticalEdge : colors.normalEdge;
     }
 
+    const drawCurved = isDummy || Math.abs(laneOffset) > 4;
+    const midX = (startX + endX) / 2;
+    const midY = (startY + endY) / 2;
+    const curveAmount = laneOffset * 1.2 + (isDummy ? 10 : 0);
+    const controlX = midX + nx * curveAmount;
+    const controlY = midY + ny * curveAmount;
+
     ctx.beginPath();
     ctx.moveTo(startX, startY);
-    ctx.lineTo(endX, endY);
+    if (drawCurved) {
+      ctx.quadraticCurveTo(controlX, controlY, endX, endY);
+    } else {
+      ctx.lineTo(endX, endY);
+    }
     ctx.stroke();
 
     const arrowLength = 12;
     const arrowAngle = Math.PI / 6;
+    const arrowAngleBase = drawCurved
+      ? Math.atan2(endY - controlY, endX - controlX)
+      : angle;
     ctx.beginPath();
     ctx.moveTo(endX, endY);
     ctx.lineTo(
-      endX - arrowLength * Math.cos(angle - arrowAngle),
-      endY - arrowLength * Math.sin(angle - arrowAngle)
+      endX - arrowLength * Math.cos(arrowAngleBase - arrowAngle),
+      endY - arrowLength * Math.sin(arrowAngleBase - arrowAngle)
     );
     ctx.moveTo(endX, endY);
     ctx.lineTo(
-      endX - arrowLength * Math.cos(angle + arrowAngle),
-      endY - arrowLength * Math.sin(angle + arrowAngle)
+      endX - arrowLength * Math.cos(arrowAngleBase + arrowAngle),
+      endY - arrowLength * Math.sin(arrowAngleBase + arrowAngle)
     );
     ctx.stroke();
 
-    if (showLabels && edge.task) {
-      const midX = (startX + endX) / 2;
-      const midY = (startY + endY) / 2;
+    if (edge.task) {
+      const shouldDrawLabel = isDummy ? showDummyLabels : showRegularLabels;
+      if (!shouldDrawLabel) {
+        ctx.restore();
+        return;
+      }
+      const labelMidX = drawCurved
+        ? 0.25 * startX + 0.5 * controlX + 0.25 * endX
+        : (startX + endX) / 2;
+      const labelMidY = drawCurved
+        ? 0.25 * startY + 0.5 * controlY + 0.25 * endY
+        : (startY + endY) / 2;
 
-      const lineAngle = Math.atan2(endY - startY, endX - startX);
+      const lineAngle = drawCurved
+        ? Math.atan2(endY - controlY, endX - controlX)
+        : Math.atan2(endY - startY, endX - startX);
       const isHorizontal = Math.abs(lineAngle) < Math.PI / 4 || Math.abs(lineAngle) > 3 * Math.PI / 4;
 
       const offsetDistance = 30;
       const offsetX = isHorizontal ? 0 : Math.cos(lineAngle + Math.PI / 2) * offsetDistance;
       const offsetY = isHorizontal ? -offsetDistance : Math.sin(lineAngle + Math.PI / 2) * offsetDistance;
 
-      const textX = midX + offsetX;
-      const textY = midY + offsetY;
+      const textX = labelMidX + offsetX;
+      const textY = labelMidY + offsetY;
 
       const taskName = edge.task.name || edge.task.id;
       const durationText = isDummy ? '(фикт.)' : `(${edge.task.duration}д)`;
@@ -612,9 +740,393 @@ useImperativeHandle(ref, () => ({
     ctx.restore();
   };
 
-const drawNodeLabel = (ctx, node) => {
-  if (!showLabels) return;
+  const parseEdge = (task) => {
+    const [from, to] = String(task.id).split('-').map(Number);
+    return {
+      ...task,
+      from,
+      to,
+      isDummy: task.isDummy === true || Number(task.duration ?? 0) === 0,
+      isCritical: task.isDummy ? false : !!task.isCritical,
+    };
+  };
 
+  const indexByEvents = (edges) => {
+    const outByEvent = new Map();
+    edges.forEach(e => {
+      if (!outByEvent.has(e.from)) outByEvent.set(e.from, []);
+      outByEvent.get(e.from).push(e);
+    });
+    return { outByEvent };
+  };
+
+  const findRealSuccessors = (startEvent, outByEvent) => {
+    const successors = new Set();
+    const queue = [startEvent];
+    const seen = new Set([startEvent]);
+
+    while (queue.length) {
+      const event = queue.shift();
+      const outgoing = outByEvent.get(event) || [];
+      outgoing.forEach(e => {
+        if (e.isDummy) {
+          if (!seen.has(e.to)) {
+            seen.add(e.to);
+            queue.push(e.to);
+          }
+        } else {
+          successors.add(e);
+        }
+      });
+    }
+    return Array.from(successors);
+  };
+
+  const buildAONGraph = (aoaTasks) => {
+    const edges = aoaTasks.map(parseEdge);
+    const real = edges.filter(e => !e.isDummy);
+    const { outByEvent } = indexByEvents(edges);
+
+    const aonNodes = real.map(e => ({
+      id: String(e.id),
+      name: e.name || String(e.id),
+      duration: Number(e.duration) || 0,
+      isCritical: !!e.isCritical,
+      _ES: Number(e.earlyStart ?? e.ES ?? e.earlyStart),
+      _EF: Number(e.earlyFinish ?? e.EF ?? e.earlyFinish),
+      x: 0,
+      y: 0,
+    }));
+    const nodeById = new Map(aonNodes.map(n => [n.id, n]));
+
+    const aonEdgesRaw = [];
+    real.forEach(r => {
+      const nextReal = findRealSuccessors(r.to, outByEvent);
+      nextReal.forEach(n => {
+        aonEdgesRaw.push({ from: String(r.id), to: String(n.id) });
+      });
+    });
+
+    const seen = new Set();
+    const aonEdgesDedup = aonEdgesRaw.filter(e => {
+      const key = `${e.from}->${e.to}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    let aonEdges = aonEdgesDedup;
+
+    const inDeg = new Map(aonNodes.map(n => [n.id, 0]));
+    const outDeg = new Map(aonNodes.map(n => [n.id, 0]));
+    aonEdges.forEach(e => {
+      inDeg.set(e.to, (inDeg.get(e.to) || 0) + 1);
+      outDeg.set(e.from, (outDeg.get(e.from) || 0) + 1);
+    });
+
+    const sources = aonNodes.filter(n => (inDeg.get(n.id) || 0) === 0);
+    if (sources.length > 0) {
+      const startId = '__START__';
+      const startNode = {
+        id: startId,
+        name: 'Старт',
+        duration: 0,
+        isCritical: sources.some(n => n.isCritical),
+        x: 0,
+        y: 0,
+      };
+      aonNodes.push(startNode);
+      nodeById.set(startId, startNode);
+      sources.forEach(n => {
+        if (n.id !== startId) aonEdges.push({ from: startId, to: n.id });
+      });
+    }
+
+    const outDegAfterStart = new Map(aonNodes.map(n => [n.id, 0]));
+    aonEdges.forEach(e => {
+      outDegAfterStart.set(e.from, (outDegAfterStart.get(e.from) || 0) + 1);
+    });
+
+    const terminal = aonNodes.filter(n => (outDegAfterStart.get(n.id) || 0) === 0);
+    if (terminal.length > 0) {
+      const finishId = '__FINISH__';
+      const finishNode = {
+        id: finishId,
+        name: 'Финиш',
+        duration: 0,
+        isCritical: terminal.some(n => n.isCritical),
+        x: 0,
+        y: 0,
+      };
+      aonNodes.push(finishNode);
+      nodeById.set(finishId, finishNode);
+      terminal.forEach(n => {
+        if (n.id !== finishId) aonEdges.push({ from: n.id, to: finishId });
+      });
+    }
+
+    aonEdges = aonEdges.map(e => {
+      const fromNode = nodeById.get(e.from);
+      const toNode = nodeById.get(e.to);
+      return {
+        ...e,
+        isCritical: !!(fromNode?.isCritical && toNode?.isCritical),
+      };
+    });
+
+    return { aonNodes, aonEdges };
+  };
+
+  const positionAONNodes = (nodes, edges) => {
+    const inDeg = new Map(nodes.map(n => [n.id, 0]));
+    const outAdj = new Map(nodes.map(n => [n.id, []]));
+    edges.forEach(e => {
+      inDeg.set(e.to, (inDeg.get(e.to) || 0) + 1);
+      outAdj.get(e.from).push(e.to);
+    });
+
+    const level = new Map(nodes.map(n => [n.id, 0]));
+    const queue = [];
+    nodes.forEach(n => {
+      if ((inDeg.get(n.id) || 0) === 0) queue.push(n.id);
+    });
+
+    while (queue.length) {
+      const u = queue.shift();
+      const current = level.get(u) || 0;
+      for (const v of outAdj.get(u)) {
+        level.set(v, Math.max(level.get(v) || 0, current + 1));
+        inDeg.set(v, (inDeg.get(v) || 0) - 1);
+        if (inDeg.get(v) === 0) queue.push(v);
+      }
+    }
+
+    const groups = new Map();
+    nodes.forEach(n => {
+      const l = level.get(n.id) || 0;
+      if (!groups.has(l)) groups.set(l, []);
+      groups.get(l).push(n);
+    });
+
+    const baseX = 120;
+    const baseY = 150;
+    const levelSpacing = 320;
+    const nodeSpacing = 110;
+
+    groups.forEach((arr, levelId) => {
+      arr.sort((a, b) => a.name.localeCompare(b.name));
+      const totalHeight = (arr.length - 1) * nodeSpacing;
+      const startY = baseY - totalHeight / 2;
+      arr.forEach((n, index) => {
+        n.x = baseX + levelId * levelSpacing;
+        n.y = startY + index * nodeSpacing;
+      });
+    });
+
+    const finishNode = nodes.find(n => n.id === '__FINISH__');
+    if (finishNode) {
+      const nonFinishNodes = nodes.filter(n => n.id !== '__FINISH__');
+      const maxX = nonFinishNodes.length > 0 ? Math.max(...nonFinishNodes.map(n => n.x)) : finishNode.x;
+      finishNode.x = maxX + levelSpacing * 0.9;
+
+      const incoming = edges
+        .filter(e => e.to === '__FINISH__')
+        .map(e => nodes.find(n => n.id === e.from))
+        .filter(Boolean);
+      if (incoming.length > 0) {
+        finishNode.y = incoming.reduce((sum, n) => sum + n.y, 0) / incoming.length;
+      }
+    }
+  };
+
+  const prepareAonFinishRoutes = (edges) => {
+    const finishEdges = (Array.isArray(edges) ? edges : [])
+      .filter(e => e?.to === '__FINISH__' && e?.fromNode && e?.toNode)
+      .sort((a, b) => a.fromNode.y - b.fromNode.y);
+
+    if (finishEdges.length === 0) return;
+
+    const laneGap = 22;
+    const laneMid = (finishEdges.length - 1) / 2;
+    finishEdges.forEach((edge, index) => {
+      const laneOffset = (index - laneMid) * laneGap;
+      edge._finishLaneOffset = laneOffset;
+      edge._finishBendDistance = 90 + Math.abs(laneOffset) * 0.7;
+    });
+  };
+
+  const drawArrow = (ctx, endX, endY, angle) => {
+    const arrowLength = 10;
+    const arrowAngle = Math.PI / 6;
+    ctx.beginPath();
+    ctx.moveTo(endX, endY);
+    ctx.lineTo(
+      endX - arrowLength * Math.cos(angle - arrowAngle),
+      endY - arrowLength * Math.sin(angle - arrowAngle)
+    );
+    ctx.moveTo(endX, endY);
+    ctx.lineTo(
+      endX - arrowLength * Math.cos(angle + arrowAngle),
+      endY - arrowLength * Math.sin(angle + arrowAngle)
+    );
+    ctx.stroke();
+  };
+
+  const drawAonNode = (ctx, node) => {
+    const radius = 8;
+    const width = Number(node._w) || 160;
+    const height = Number(node._h) || 50;
+    const x = node.x - width / 2;
+    const y = node.y - height / 2;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.15)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetX = 2;
+    ctx.shadowOffsetY = 2;
+    ctx.fillStyle = node.isCritical ? colors.criticalNode : colors.normalNode;
+    ctx.strokeStyle = node.isCritical ? colors.criticalEdge : colors.normalEdge;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.arcTo(x + width, y, x + width, y + height, radius);
+    ctx.arcTo(x + width, y + height, x, y + height, radius);
+    ctx.arcTo(x, y + height, x, y, radius);
+    ctx.arcTo(x, y, x + width, y, radius);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    const lineHeight = 14;
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 12px Arial';
+    const lines = Array.isArray(node._lines) && node._lines.length ? node._lines : [node.name];
+    const totalTitleHeight = lines.length * lineHeight;
+    const startY = node.y - totalTitleHeight / 2;
+    lines.forEach((line, index) => {
+      ctx.fillText(line, node.x, startY + index * lineHeight);
+    });
+    ctx.font = '11px Arial';
+    ctx.fillText(node._durationText || `(${Number(node.duration) || 0}д)`, node.x, node.y + totalTitleHeight / 2 + 10);
+  };
+
+  const drawAonEdge = (ctx, edge) => {
+    const from = edge.fromNode;
+    const to = edge.toNode;
+    if (!from || !to) return;
+
+    const isCriticalEdge = edge.isCritical === true;
+
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.lineWidth = isCriticalEdge ? 3 : 2;
+    ctx.strokeStyle = isCriticalEdge ? colors.criticalEdge : colors.normalEdge;
+
+    if (to.id === '__FINISH__') {
+      const fromWidth = (Number(from._w) || 160) / 2 + 12;
+      const toWidth = (Number(to._w) || 160) / 2 + 12;
+      const toHeight = Number(to._h) || 50;
+
+      const startX = from.x + fromWidth;
+      const startY = from.y;
+      const laneOffset = Number(edge._finishLaneOffset || 0);
+      const maxEndYOffset = Math.max(8, toHeight / 2 - 8);
+      const endY = to.y + Math.max(-maxEndYOffset, Math.min(maxEndYOffset, laneOffset * 0.35));
+      const endX = to.x - toWidth;
+      const bendX = endX - Number(edge._finishBendDistance || 90);
+      const controlX = bendX + 36;
+      const controlY = startY;
+
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(bendX, startY);
+      ctx.quadraticCurveTo(controlX, controlY, endX, endY);
+      ctx.stroke();
+
+      const tangentAngle = Math.atan2(endY - controlY, endX - controlX);
+      drawArrow(ctx, endX, endY, tangentAngle);
+    } else {
+      const angle = Math.atan2(to.y - from.y, to.x - from.x);
+      const fromPad = (Number(from._w) || 160) / 2 + 12;
+      const toPad = (Number(to._w) || 160) / 2 + 12;
+      const startX = from.x + Math.cos(angle) * fromPad;
+      const startY = from.y + Math.sin(angle) * fromPad;
+      const endX = to.x - Math.cos(angle) * toPad;
+      const endY = to.y - Math.sin(angle) * toPad;
+
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+      drawArrow(ctx, endX, endY, angle);
+    }
+
+    ctx.restore();
+  };
+
+  const wrapText = (ctx, text, maxLineWidth) => {
+    const words = String(text).split(/\s+/).filter(Boolean);
+    const lines = [];
+    let current = '';
+
+    const pushCurrent = () => {
+      if (current) {
+        lines.push(current.trim());
+        current = '';
+      }
+    };
+
+    words.forEach(word => {
+      const test = current ? `${current} ${word}` : word;
+      if (ctx.measureText(test).width <= maxLineWidth) {
+        current = test;
+      } else if (!current) {
+        let chunk = '';
+        for (const ch of word) {
+          const candidate = chunk + ch;
+          if (ctx.measureText(candidate).width <= maxLineWidth) {
+            chunk = candidate;
+          } else {
+            if (chunk) lines.push(chunk);
+            chunk = ch;
+          }
+        }
+        current = chunk;
+      } else {
+        pushCurrent();
+        current = word;
+      }
+    });
+    pushCurrent();
+    return lines.length ? lines : [''];
+  };
+
+  const measureAONNodes = (ctx, nodes) => {
+    const minWidth = 140;
+    const maxWidth = 280;
+    const padding = 10;
+    const lineHeight = 14;
+
+    nodes.forEach(node => {
+      const durationText = `(${Number(node.duration) || 0}д)`;
+      ctx.font = 'bold 12px Arial';
+      const titleLines = wrapText(ctx, String(node.name || ''), maxWidth - padding * 2);
+      const titleMaxWidth = Math.max(...titleLines.map(line => ctx.measureText(line).width), 0);
+      ctx.font = '11px Arial';
+      const durationWidth = ctx.measureText(durationText).width;
+      const contentWidth = Math.max(titleMaxWidth, durationWidth);
+
+      node._w = Math.max(minWidth, Math.min(maxWidth, contentWidth + padding * 2));
+      node._h = padding * 2 + titleLines.length * lineHeight + 20;
+      node._lines = titleLines;
+      node._durationText = durationText;
+    });
+  };
+
+const drawNodeLabel = (ctx, node) => {
   ctx.font = '12px Arial';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
@@ -641,13 +1153,19 @@ const drawNodeLabel = (ctx, node) => {
     ctx.textAlign = 'left';
     ctx.fillText('Легенда', legendX + 10, legendY + 20);
     
-    const items = [
-      { color: colors.criticalNode, text: 'Критический узел', type: 'node' },
-      { color: colors.normalNode,   text: 'Обычный узел',      type: 'node' },
-      { color: colors.criticalEdge, text: 'Критическая работа',type: 'edge' },
-      { color: colors.normalEdge,   text: 'Обычная работа',    type: 'edge' },
-      { color: colors.normalEdge,   text: 'Фиктивная работа',  type: 'dummy', secondLine: '(пунктир)' }
-    ];
+    const items = renderMode === 'aon'
+      ? [
+          { color: colors.criticalNode, text: 'Критический узел', type: 'node' },
+          { color: colors.normalNode,   text: 'Обычный узел',      type: 'node' },
+          { color: colors.criticalEdge, text: 'Критический путь',  type: 'edge' },
+        ]
+      : [
+          { color: colors.criticalNode, text: 'Критический узел', type: 'node' },
+          { color: colors.normalNode,   text: 'Обычный узел',      type: 'node' },
+          { color: colors.criticalEdge, text: 'Критическая работа',type: 'edge' },
+          { color: colors.normalEdge,   text: 'Обычная работа',    type: 'edge' },
+          { color: colors.normalEdge,   text: 'Фиктивная работа',  type: 'dummy', secondLine: '(пунктир)' }
+        ];
     
     items.forEach((item, index) => {
       const y = legendY + 40 + index * 20;
@@ -748,20 +1266,29 @@ const drawNodeLabel = (ctx, node) => {
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
-                variant={showLabels ? "default" : "outline"}
-                onClick={() => setShowLabels(!showLabels)}
-              >
-                {showLabels ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                Подписи
-              </Button>
-              
-              <Button
-                size="sm"
                 variant={showTimes ? "default" : "outline"}
                 onClick={() => setShowTimes(!showTimes)}
               >
                 {showTimes ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
                 Времена
+              </Button>
+
+              <Button
+                size="sm"
+                variant={showRegularLabels ? "default" : "outline"}
+                onClick={() => setShowRegularLabels(!showRegularLabels)}
+              >
+                {showRegularLabels ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                Подписи обычных
+              </Button>
+
+              <Button
+                size="sm"
+                variant={showDummyLabels ? "default" : "outline"}
+                onClick={() => setShowDummyLabels(!showDummyLabels)}
+              >
+                {showDummyLabels ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                Подписи фиктивных
               </Button>
             </div>
             
@@ -775,6 +1302,18 @@ const drawNodeLabel = (ctx, node) => {
                 <option value="modern">Современная</option>
                 <option value="classic">Классическая</option>
                 <option value="dark">Темная</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Режим:</span>
+              <select
+                value={renderMode}
+                onChange={(e) => setRenderMode(e.target.value)}
+                className="px-2 py-1 border rounded text-sm"
+              >
+                <option value="aoa">AOA (работа=ребро)</option>
+                <option value="aon">AON (работа=узел)</option>
               </select>
             </div>
             
