@@ -89,7 +89,7 @@ function App() {
   const [isTabsAtStart, setIsTabsAtStart] = useState(true);
   const [isTabsAtEnd, setIsTabsAtEnd] = useState(false);
   const [missingDepsDialogOpen, setMissingDepsDialogOpen] = useState(false);
-  const [missingDepsInfo, setMissingDepsInfo] = useState({ missingIds: [], usage: [], byTask: [] });
+  const [missingDepsInfo, setMissingDepsInfo] = useState({ missingIds: [], byTask: [] });
   const [currentMissingTaskIndex, setCurrentMissingTaskIndex] = useState(0);
   const [manualPredecessorSelections, setManualPredecessorSelections] = useState(['']);
   const [missingDepsDialogError, setMissingDepsDialogError] = useState('');
@@ -546,34 +546,44 @@ function App() {
 
   const getMissingPredecessorInfo = (tasks) => {
     const list = Array.isArray(tasks) ? tasks : [];
-    const existingIds = new Set(
-      list
-        .map(t => String(t?.id ?? '').trim())
-        .filter(Boolean)
-    );
-    const usageMap = new Map();
+    const tasksById = new Map();
+    list.forEach(task => {
+      const id = String(task?.id ?? '').trim();
+      if (id && !tasksById.has(id)) tasksById.set(id, task);
+    });
     const byTask = [];
 
     list.forEach(task => {
       const taskId = String(task?.id ?? '').trim();
       if (!taskId) return;
       const predecessors = normalizePredecessors(task);
+      const taskTemplateId = String(task?.templateId ?? '').trim();
+      const isTemplateStrictMode = taskTemplateId && task?.predecessorBindingMode !== 'manual';
       const existingForTask = [];
       const missingForTask = [];
       predecessors.forEach(predId => {
-        if (existingIds.has(predId)) {
+        const candidate = tasksById.get(predId);
+        if (!candidate) {
+          missingForTask.push(predId);
+          return;
+        }
+
+        if (!isTemplateStrictMode) {
           existingForTask.push(predId);
           return;
         }
+
+        const candidateTemplateId = String(candidate?.templateId ?? '').trim();
+        if (candidateTemplateId && candidateTemplateId === predId) {
+          existingForTask.push(predId);
+          return;
+        }
+
         missingForTask.push(predId);
       });
       const uniqueExisting = Array.from(new Set(existingForTask));
       const uniqueMissing = Array.from(new Set(missingForTask));
       if (uniqueMissing.length > 0 && uniqueExisting.length === 0) {
-        uniqueMissing.forEach(predId => {
-          if (!usageMap.has(predId)) usageMap.set(predId, new Set());
-          usageMap.get(predId).add(taskId);
-        });
         byTask.push({
           taskId,
           taskName: String(task?.name ?? ''),
@@ -582,18 +592,12 @@ function App() {
       }
     });
 
-    const missingIds = Array.from(usageMap.keys()).sort((a, b) =>
+    const missingIds = Array.from(new Set(byTask.flatMap(item => item.missingIds))).sort((a, b) =>
       a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
 
     return {
       missingIds,
-      usage: missingIds.map(id => ({
-        id,
-        usedBy: Array.from(usageMap.get(id) || []).sort((a, b) =>
-          a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
-        ),
-      })),
       byTask,
     };
   };
@@ -632,6 +636,7 @@ function App() {
       return {
         ...task,
         predecessors: Array.from(new Set([...preservedExisting, ...manualResolved])),
+        predecessorBindingMode: 'manual',
       };
     });
 
@@ -939,6 +944,7 @@ function App() {
 
         tasks.push({
           id: String(tpl.id),
+          templateId: String(tpl.id),
           name: tpl.name,
           duration: days,
           laborIntensity: hours,
@@ -1067,7 +1073,6 @@ function App() {
     .filter((task, index) =>
       task.id &&
       index < activeTaskOrderIndex &&
-      !activeMissingIds.includes(task.id) &&
       task.id !== activeMissingTask?.taskId
     )
     .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' }));
@@ -1080,6 +1085,19 @@ function App() {
   const canAddManualPredecessor = maxManualPredecessors > 0 &&
     manualPredecessorSelections.length < maxManualPredecessors &&
     !hasEmptyManualSelection;
+  const calculatedEdgeIdByTaskId = (() => {
+    const map = {};
+    const tasks = Array.isArray(calculationResults?.tasks) ? calculationResults.tasks : [];
+    tasks.forEach(task => {
+      if (!task || task.isDummy === true) return;
+      const edgeId = String(task.id ?? '').trim();
+      if (!looksLikeEdgeId(edgeId)) return;
+      const sourceId = String(task.sourceTaskId ?? edgeId).trim();
+      if (!sourceId) return;
+      map[sourceId] = edgeId;
+    });
+    return map;
+  })();
 
   return (
     <div className="min-h-screen w-full bg-background text-foreground">
@@ -1283,6 +1301,8 @@ function App() {
                 onLastNumericLimitChange={setLastNumericLimit}
                 hoursPerDay={hoursPerDay}
                 onHoursPerDayChange={setHoursPerDay}
+                calculatedEdgeIdByTaskId={calculatedEdgeIdByTaskId}
+                showCalculatedEdgeIds={!!calculationResults}
               />
             </TabsContent>
 
@@ -1463,26 +1483,14 @@ function App() {
                 <div className="mt-1">Нет активной задачи для обработки.</div>
               )}
               <div className="mt-1 text-muted-foreground">
-                Для ручного режима достаточно выбрать хотя бы одного предшественника.
+                Достаточно выбрать хотя бы одного предшественника для задачи.
               </div>
               <div className="mt-1 text-muted-foreground">
-                Для выбора доступны только задачи, расположенные выше текущей. Поля можно добавлять кнопкой "+".
+                Для выбора доступны только задачи, расположенные раньше текущей. Поля можно добавлять кнопкой "+".
               </div>
               <div className="mt-1 text-muted-foreground">
-                Максимум предшественников для ручного выбора: {maxManualPredecessors}.
+                Максимум предшественников: {maxManualPredecessors}.
               </div>
-            </div>
-
-            <div className="rounded-md border bg-muted/30 p-3 text-sm">
-              {missingDepsInfo.usage
-                .filter(item => activeMissingIds.includes(item.id))
-                .map(item => (
-                <div key={item.id} className="mb-1">
-                  <span className="font-medium">{item.id}</span>
-                  <span className="text-muted-foreground"> используется в: </span>
-                  <span>{item.usedBy.join(', ')}</span>
-                </div>
-              ))}
             </div>
 
             <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
@@ -1585,7 +1593,7 @@ function App() {
               onClick={handleApplyManualMappingAndCalculate}
               disabled={isResolvingMissingDeps || activeMissingIds.length === 0}
             >
-              Применить ручной выбор для этой задачи
+              Применить для этой задачи
             </Button>
           </div>
         </DialogContent>

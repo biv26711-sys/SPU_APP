@@ -222,14 +222,17 @@ export class SPUCalculation {
       const calculation = new SPUCalculation(spuTasks, { hoursPerDay });
       const result = calculation.calculateEarlyStartAndFinish();
 
-      const calculatedTasks = result.tasks.map(spuTask => ({
+      const calculatedTasks = result.tasks.map(spuTask => {
+        const sourceTask = tasks.find(t => t.id === spuTask.id);
+        return {
         id: spuTask.id,
         name: spuTask.name,
         duration: spuTask.duration,
         laborIntensity: spuTask.laborIntensity,
         numberOfPerformers: spuTask.numberOfPerformers,
-        predecessors: tasks.find(t => t.id === spuTask.id)?.predecessors || [],
-        isDummy: Boolean(tasks.find(t => t.id === spuTask.id)?.isDummy), // новое
+        predecessors: sourceTask?.predecessors || [],
+        isDummy: Boolean(sourceTask?.isDummy), // новое
+        sourceTaskId: sourceTask?.sourceTaskId ?? null,
         earlyStart: spuTask.ES,
         earlyFinish: spuTask.EF,
         lateStart: spuTask.LS,
@@ -241,7 +244,7 @@ export class SPUCalculation {
         earlyEventTimeJ: result.earlyEventTime[spuTask.to], 
         lateEventTimeI: result.lateEventTime[spuTask.from], 
         lateEventTimeJ: result.lateEventTime[spuTask.to] 
-      }));
+      }});
 
       return {
         tasks: calculatedTasks,

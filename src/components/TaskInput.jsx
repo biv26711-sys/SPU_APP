@@ -35,6 +35,8 @@ const TaskInput = ({
   onLastNumericLimitChange,
   hoursPerDay,
   onHoursPerDayChange,
+  calculatedEdgeIdByTaskId = {},
+  showCalculatedEdgeIds = false,
 }) => {
  const [localResourceLimit, setLocalResourceLimit] = useState(resourceLimit);
   const [isConfirmModalOpen, setConfirmModalOpen] = useState(false);
@@ -47,6 +49,7 @@ const TaskInput = ({
     predecessors: ''
   });
   const [predecessorSelections, setPredecessorSelections] = useState(['']);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
   useEffect(() => {
     setLocalResourceLimit(resourceLimit);
   }, [resourceLimit]);
@@ -90,6 +93,7 @@ const TaskInput = ({
   const availablePredecessorIdSet = new Set(availablePredecessorOptions.map(task => task.id));
   const MAX_PREDECESSORS = 4;
   const isTaskIdentityReady = Boolean(String(formData.id || '').trim() && String(formData.name || '').trim());
+  const sliderProgress = Math.max(0, Math.min(100, ((Number(hoursPerDay) - 1) / 23) * 100));
   const selectedPredecessors = predecessorSelections
     .map(value => String(value || '').trim())
     .filter(Boolean);
@@ -117,6 +121,81 @@ const TaskInput = ({
     onHoursPerDayChange(next);
   };
 
+  const toNaturalInt = (value) => {
+    const text = String(value ?? '').trim();
+    if (!/^\d+$/.test(text)) return null;
+    const n = Number(text);
+    if (!Number.isInteger(n) || n <= 0) return null;
+    return n;
+  };
+
+  const normalizeTaskPredecessors = (task) => {
+    if (Array.isArray(task?.predecessors)) {
+      return task.predecessors.map(p => String(p ?? '').trim()).filter(Boolean);
+    }
+    if (typeof task?.predecessors === 'string' && task.predecessors.trim()) {
+      return task.predecessors
+        .split(',')
+        .map(p => String(p ?? '').trim())
+        .filter(Boolean);
+    }
+    return [];
+  };
+
+  const shiftTaskIdsForInsertion = (tasksList, insertId) => {
+    return (Array.isArray(tasksList) ? tasksList : []).map(task => {
+      const currentIdText = String(task?.id ?? '').trim();
+      const currentIdNum = toNaturalInt(currentIdText);
+      const nextId = Number.isInteger(currentIdNum) && currentIdNum >= insertId
+        ? String(currentIdNum + 1)
+        : currentIdText;
+
+      const nextPreds = normalizeTaskPredecessors(task).map(predId => {
+        const predNum = toNaturalInt(predId);
+        if (!Number.isInteger(predNum) || predNum < insertId) return predId;
+        return String(predNum + 1);
+      });
+
+      return {
+        ...task,
+        id: nextId,
+        predecessors: nextPreds,
+        predecessorBindingMode: 'manual',
+      };
+    });
+  };
+
+  const shiftTaskIdsForDeletion = (tasksList, deletedId) => {
+    return (Array.isArray(tasksList) ? tasksList : []).map(task => {
+      const currentIdText = String(task?.id ?? '').trim();
+      const currentIdNum = toNaturalInt(currentIdText);
+      const nextId = Number.isInteger(currentIdNum) && currentIdNum > deletedId
+        ? String(currentIdNum - 1)
+        : currentIdText;
+
+      const nextPreds = Array.from(
+        new Set(
+          normalizeTaskPredecessors(task)
+            .map(predId => {
+              const predNum = toNaturalInt(predId);
+              if (!Number.isInteger(predNum)) return predId;
+              if (predNum === deletedId) return null;
+              if (predNum > deletedId) return String(predNum - 1);
+              return predId;
+            })
+            .filter(Boolean)
+        )
+      );
+
+      return {
+        ...task,
+        id: nextId,
+        predecessors: nextPreds,
+        predecessorBindingMode: 'manual',
+      };
+    });
+  };
+
   const handleInputChange = (field, value) => {
     setFormData(prev => {
       const next = { ...prev, [field]: value };
@@ -142,11 +221,18 @@ const TaskInput = ({
     });
 
     if (field === 'id' || field === 'name') setMissingReq([]); 
+    if (field === 'id') {
+      const nextId = String(value || '').trim();
+      if (nextId !== String(selectedTemplateId || '').trim()) {
+        setSelectedTemplateId('');
+      }
+    }
     setFormError(''); 
   };
 
   const handleNameText = (text) => { 
     setFormData(f => ({ ...f, name: text })); 
+    setSelectedTemplateId('');
     setMissingReq([]); 
     setFormError(''); 
   };
@@ -157,12 +243,32 @@ const TaskInput = ({
     if (
       !String(formData.id).trim() || 
       !String(formData.name).trim() || 
-      !String(formData.duration).trim() || 
+      !String(formData.laborIntensity).trim() ||
       !String(formData.numberOfPerformers).trim() 
     ) {
       setFormError('Пожалуйста, заполните все обязательные поля'); 
       return;
     }
+
+    const laborHours = parseFloat(formData.laborIntensity);
+    if (!Number.isFinite(laborHours) || laborHours <= 0) {
+      setFormError('Трудоемкость должна быть больше 0');
+      return;
+    }
+
+    const performersRaw = parseInt(formData.numberOfPerformers, 10);
+    if (!Number.isFinite(performersRaw) || performersRaw <= 0) {
+      setFormError('Количество исполнителей должно быть больше 0');
+      return;
+    }
+    const performers = performersRaw;
+    const calculatedDuration = calcDurationDays(laborHours, performers, hoursPerDay);
+    if (!Number.isFinite(calculatedDuration) || calculatedDuration <= 0) {
+      setFormError('Не удалось рассчитать продолжительность. Проверьте исходные данные.');
+      return;
+    }
+
+    const normalizedTemplateId = String(selectedTemplateId || '').trim();
 
     const predecessors = Array.from(
       new Set(
@@ -182,14 +288,17 @@ const TaskInput = ({
       return;
     }
 
-    const newTask = createTask(
+    const newTask = {
+      ...createTask(
       formData.id,
       formData.name,
-      parseFloat(formData.duration),
-      (formData.laborIntensity !== '' ? parseFloat(formData.laborIntensity) : null),
-      parseInt(formData.numberOfPerformers),
+      calculatedDuration,
+      laborHours,
+      performers,
       predecessors
-    );
+      ),
+      templateId: normalizedTemplateId || null,
+    };
 
     if (editingTask) {
       const updatedTasks = tasks.map(task =>
@@ -198,11 +307,28 @@ const TaskInput = ({
       onTasksChange(updatedTasks);
       setEditingTask(null);
     } else {
-      if (tasks.some(task => task.id === formData.id)) {
-        setFormError('Работа с таким ID уже существует');
-        return;
+      const newTaskIdNum = toNaturalInt(formData.id);
+
+      if (Number.isInteger(newTaskIdNum)) {
+        const shiftedTasks = shiftTaskIdsForInsertion(tasks, newTaskIdNum);
+        const insertIndex = shiftedTasks.findIndex(task => {
+          const idNum = toNaturalInt(task?.id);
+          return Number.isInteger(idNum) && idNum >= newTaskIdNum;
+        });
+        const nextTasks = [...shiftedTasks];
+        if (insertIndex === -1) {
+          nextTasks.push(newTask);
+        } else {
+          nextTasks.splice(insertIndex, 0, newTask);
+        }
+        onTasksChange(nextTasks);
+      } else {
+        if (tasks.some(task => String(task?.id) === String(formData.id))) {
+          setFormError('Работа с таким ID уже существует');
+          return;
+        }
+        onTasksChange([...tasks, newTask]);
       }
-      onTasksChange([...tasks, newTask]);
     }
 
     setFormData({
@@ -214,6 +340,7 @@ const TaskInput = ({
       predecessors: ''
     });
     setPredecessorSelections(['']);
+    setSelectedTemplateId('');
     setMissingReq([]);
     setFormError(''); 
   };
@@ -235,6 +362,7 @@ const TaskInput = ({
       predecessors: existingPreds.join(', ')
     });
     setPredecessorSelections(existingPreds.length > 0 ? existingPreds : ['']);
+    setSelectedTemplateId(String(task?.templateId ?? ''));
     setEditingTask(task);
     setMissingReq([]);
     setFormError(''); 
@@ -242,8 +370,15 @@ const TaskInput = ({
 
   const handleDelete = (taskId) => {
     if (confirm('Вы уверены, что хотите удалить эту задачу?')) {
-      const updatedTasks = tasks.filter(task => task.id !== taskId);
-      onTasksChange(updatedTasks);
+      const deletedTaskId = String(taskId ?? '').trim();
+      const deletedTaskNum = toNaturalInt(deletedTaskId);
+      const remainingTasks = tasks.filter(task => String(task?.id ?? '').trim() !== deletedTaskId);
+
+      if (Number.isInteger(deletedTaskNum)) {
+        onTasksChange(shiftTaskIdsForDeletion(remainingTasks, deletedTaskNum));
+      } else {
+        onTasksChange(remainingTasks);
+      }
     }
   };
 
@@ -258,6 +393,7 @@ const TaskInput = ({
       predecessors: ''
     });
     setPredecessorSelections(['']);
+    setSelectedTemplateId('');
     setMissingReq([]);
     setFormError(''); 
   };
@@ -304,6 +440,11 @@ const TaskInput = ({
             <div className="space-y-3 max-h-[600px] overflow-y-auto">
               {tasks.map((task) => {
                 const visiblePredecessors = getVisiblePredecessors(task);
+                const taskId = String(task?.id ?? '').trim();
+                const calculatedEdgeId = String(calculatedEdgeIdByTaskId?.[taskId] ?? '').trim();
+                const shouldShowCalculatedEdgeId = showCalculatedEdgeIds &&
+                  calculatedEdgeId &&
+                  calculatedEdgeId !== taskId;
                 return (
                 <div
                   key={task.id}
@@ -312,14 +453,19 @@ const TaskInput = ({
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
                       <Badge variant="outline">{task.id}</Badge>
+                      {shouldShowCalculatedEdgeId && (
+                        <Badge variant="secondary" className="bg-sky-50 text-sky-700 border-sky-200">
+                          {calculatedEdgeId}
+                        </Badge>
+                      )}
                       <h3 className="font-medium">{task.name}</h3>
                       {task.isCritical && (
                         <Badge variant="destructive">Критический путь</Badge>
                       )}
                     </div>
                     <div className="text-sm text-muted-foreground space-y-1">
-                      <div>Длительность: {task.duration} дн.</div>
-                      <div>Трудоемкость: {task.laborIntensity} н-ч</div>
+                      <div>Длительность: {task.duration} (дн.)</div>
+                      <div>Трудоемкость: {task.laborIntensity} (н-ч)</div>
                       <div>Исполнители: {task.numberOfPerformers} чел.</div>
                       <div>Предшественники: {visiblePredecessors.length > 0 ? visiblePredecessors.join(', ') : 'нет'}</div>
                     </div>
@@ -411,7 +557,8 @@ const TaskInput = ({
                   step="0.5"
                   value={hoursPerDay}
                   onChange={(e) => handleHoursPerDayChange(e.target.value)}
-                  className="w-full"
+                  className="w-full hours-per-day-slider"
+                  style={{ '--slider-progress': `${sliderProgress}%` }}
                 />
                 <Input
                   type="number"
@@ -464,6 +611,7 @@ const TaskInput = ({
                     laborIntensity: laborHours != null ? String(laborHours) : f.laborIntensity,
                     duration: durationDays,
                   }));
+                  setSelectedTemplateId(String(template?.id ?? ''));
 
                   const norm = Array.isArray(required) 
                     ? required 
@@ -531,21 +679,22 @@ const TaskInput = ({
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="duration">Продолжительность (дни) *</Label>
+              <Label htmlFor="duration">Продолжительность (дн.)</Label>
               <Input
                 id="duration"
                 type="number"
                 step="0.1"
                 min="0.1"
                 value={formData.duration}
-                onChange={(e) => handleInputChange('duration', e.target.value)}
                 placeholder="10"
+                readOnly
                 disabled={!isTaskIdentityReady}
+                title="Рассчитывается автоматически из трудоемкости, исполнителей и длительности рабочего дня"
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="laborIntensity">Трудоемкость (н-ч)</Label>
+              <Label htmlFor="laborIntensity">Трудоемкость (н-ч) *</Label>
               <Input
                 id="laborIntensity"
                 type="number"
