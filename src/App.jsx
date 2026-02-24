@@ -1340,7 +1340,7 @@ function App() {
           </TabsContent>
 
           <TabsContent value="gantt" className="space-y-4">
-             {calculationResults ? ( <GanttChart ref={ganttChartRef} results={calculationResults} project={project} />) : (
+             {calculationResults ? ( <GanttChart ref={ganttChartRef} results={calculationResults} project={project} resourceLimit={resourceLimit}/>) : (
               <Card>
                 <CardContent className="text-center py-8">
                   <BarChart3 className="h-12 w-12 mx-auto text-gray-400 mb-4" />

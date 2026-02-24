@@ -22,7 +22,7 @@ import {
 import { format, addDays, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-const GanttChart = forwardRef(({ results, project }, ref) => {
+const GanttChart = forwardRef(({ results, project, resourceLimit}, ref) => {
   const [history, setHistory] = useState([]);
   const [showCriticalPath, setShowCriticalPath] = useState(true);
   const [showTimeScale, setShowTimeScale] = useState(true);
@@ -42,6 +42,7 @@ const RESOURCE_CHART_HEIGHT = 150;
 
 // Синхронизируем локальные задачи с входящими данными при загрузке
 useEffect(() => {
+  
   if (results?.tasks) {
     setLocalTasks(JSON.parse(JSON.stringify(results.tasks)));
   }
@@ -162,36 +163,109 @@ useEffect(() => {
   }
 }, [localTasks, scrollOffset, scale]);
 
-  const handleMouseMove = useCallback((e) => {
-  // Если флаг снят — ПРЕРЫВАЕМ выполнение сразу
-  if (!isDraggingRef.current && !isPanning) return;
+// Вспомогательная функция: кто должен закончиться до начала текущей задачи
+const getTaskPredecessors = (currentTask, allTasks) => {
+  const [startNode] = currentTask.id.split('-').map(Number);
+  return allTasks.filter(t => {
+    const [_, endNode] = t.id.split('-').map(Number);
+    return endNode === startNode;
+  });
+};
 
-  if (isDraggingRef.current && dragInfo.taskId) {
-    const deltaX = e.clientX - dragInfo.startX;
-    const daysDelta = Math.round(deltaX / (DAY_WIDTH * scale));
-    
-    // Используем функциональное обновление, чтобы не зависеть от localTasks в массиве зависимостей
-    setLocalTasks(prev => {
-      return prev.map(task => {
-        if (task.id === dragInfo.taskId) {
-          const originalTask = results.tasks.find(t => t.id === task.id);
-          const maxReserve = originalTask.totalFloat || 0;
-          let newStart = dragInfo.originalStart + daysDelta;
-          newStart = Math.max(originalTask.earlyStart, Math.min(newStart, originalTask.earlyStart + maxReserve));
-          const newTotalFloat = maxReserve - (newStart - originalTask.earlyStart);
-          
-          if (task.earlyStart === newStart) return task;
-          return { ...task, earlyStart: newStart, totalFloat: newTotalFloat };
-        }
-        return task;
-      });
+// Вспомогательная функция: кто должен начаться после конца текущей задачи
+const getTaskSuccessors = (currentTask, allTasks) => {
+  const [_, endNode] = currentTask.id.split('-').map(Number);
+  return allTasks.filter(t => {
+    const [childStartNode] = t.id.split('-').map(Number);
+    return childStartNode === endNode;
+  });
+};
+
+// Основная функция каскадного обновления
+const updateCascade = (allTasks, movedTaskId, direction) => {
+  const task = allTasks.find(t => t.id === movedTaskId);
+  if (!task) return;
+
+  if (direction === 'forward') {
+    // Толкаем ПОТОМКОВ (вправо)
+    const taskEnd = task.earlyStart + task.duration;
+    const successors = getTaskSuccessors(task, allTasks);
+
+    successors.forEach(child => {
+      if (child.earlyStart < taskEnd) {
+        child.earlyStart = taskEnd;
+        updateCascade(allTasks, child.id, 'forward');
+      }
     });
-  } else if (isPanning) {
-    const deltaX = e.clientX - panStart.x;
-    const deltaY = e.clientY - panStart.y;
-    setScrollOffset(prev => ({ x: prev.x + deltaX, y: prev.y + deltaY }));
-    setPanStart({ x: e.clientX, y: e.clientY });
+  } else if (direction === 'backward') {
+    // Тянем ПРЕДКОВ (влево) — только если это необходимо по логике
+    // Но обычно в планировании задача просто "упирается" в предков
+    // Поэтому при движении влево мы просто ограничиваем текущую задачу
+    const predecessors = getTaskPredecessors(task, allTasks);
+    let maxPredEnd = 0;
+    
+    predecessors.forEach(p => {
+      const pEnd = p.earlyStart + p.duration;
+      if (pEnd > maxPredEnd) maxPredEnd = pEnd;
+    });
+
+    if (task.earlyStart < maxPredEnd) {
+      task.earlyStart = maxPredEnd;
+    }
   }
+};
+
+  const handleMouseMove = useCallback((e) => {
+  if (!isDraggingRef.current || !dragInfo.taskId) {
+    if (isPanning) {
+      const deltaX = e.clientX - panStart.x;
+      const deltaY = e.clientY - panStart.y;
+      setScrollOffset(prev => ({ x: prev.x + deltaX, y: prev.y + deltaY }));
+      setPanStart({ x: e.clientX, y: e.clientY });
+    }
+    return;
+  }
+
+  const deltaX = e.clientX - dragInfo.startX;
+  const daysDelta = Math.round((deltaX / (DAY_WIDTH * scale)) * 10) / 10;
+  
+  setLocalTasks(prev => {
+    const newTasks = JSON.parse(JSON.stringify(prev));
+    const task = newTasks.find(t => t.id === dragInfo.taskId);
+    const originalTask = results.tasks.find(t => t.id === dragInfo.taskId);
+    
+    let newStart = dragInfo.originalStart + daysDelta;
+
+    // 1. ОГРАНИЧЕНИЕ СЛЕВА (Предки)
+    // Находим конец самого позднего предка
+    const predecessors = getTaskPredecessors(task, newTasks);
+    const minAllowedStart = predecessors.reduce((max, p) => 
+      Math.max(max, p.earlyStart + p.duration), 0);
+    
+    // Задача не может начаться раньше, чем закончатся предки 
+    // И не раньше своего первоначального минимального старта
+    newStart = Math.max(newStart, minAllowedStart, originalTask.earlyStart);
+
+    // 2. ОГРАНИЧЕНИЕ СПРАВА (Критический путь / Резерв)
+    const maxReserve = originalTask.totalFloat || 0;
+    const maxAllowedStart = originalTask.earlyStart + maxReserve;
+    newStart = Math.min(newStart, maxAllowedStart);
+
+    if (task.earlyStart === newStart) return prev;
+
+    task.earlyStart = newStart;
+
+    // 3. КАСКАД ВПЕРЕД (Толкаем тех, кто впереди)
+    updateCascade(newTasks, task.id, 'forward');
+
+    // Пересчитываем визуальные резервы для всех
+    newTasks.forEach(t => {
+      const orig = results.tasks.find(ot => ot.id === t.id);
+      t.totalFloat = Math.max(0, orig.lateFinish - (t.earlyStart + t.duration));
+    });
+
+    return newTasks;
+  });
 }, [dragInfo, isPanning, panStart, scale, results.tasks]);
 
   const handleMouseUp = useCallback(() => {
@@ -205,6 +279,7 @@ useEffect(() => {
 }, []); // Зависимости теперь не нужны
   useEffect(() => {
     const canvas = canvasRef.current;
+    
     if (canvas) {
       canvas.addEventListener('wheel', handleWheel, { passive: false });
       canvas.addEventListener('mousedown', handleMouseDown);
@@ -236,50 +311,107 @@ useEffect(() => {
   }, [localTasks, showCriticalPath, showTimeScale, showResources, showTimeReserves, scale, scrollOffset]);
 
 const drawResourceChart = (ctx, chartWidth, totalHeight) => {
-  const startY = totalHeight - RESOURCE_CHART_HEIGHT;
+  const limit = resourceLimit || 10;
+  // Настройки оформления
+  const CHART_PADDING_TOP = 30; // Отступ от Ганта до графика ресурсов
+  const AXIS_LABEL_SPACE = 25;  // Место под цифры дней снизу
+  const startY = totalHeight - RESOURCE_CHART_HEIGHT + CHART_PADDING_TOP;
   const startX = LABEL_WIDTH;
   const dayWidth = DAY_WIDTH * scale;
+  const chartAreaHeight = RESOURCE_CHART_HEIGHT - CHART_PADDING_TOP - AXIS_LABEL_SPACE - 20;
 
-  // 1. Считаем загрузку по дням
+  // 1. Логика расчета (оставляем без изменений, как просили)
   const resourceUsage = new Array(Math.ceil(projectDuration) + 1).fill(0);
   localTasks.forEach(task => {
-    const start = Math.floor(task.earlyStart);
-    const end = Math.floor(task.earlyStart + task.duration);
-    for (let i = start; i < end; i++) {
-      if (i >= 0 && i < resourceUsage.length) {
-        resourceUsage[i] += (task.numberOfPerformers || 0);
+    const taskStart = task.earlyStart;
+    const taskEnd = task.earlyStart + task.duration;
+    const performers = task.numberOfPerformers || 0;
+    for (let i = 0; i < resourceUsage.length; i++) {
+      const intervalStart = i;
+      const intervalEnd = i + 1;
+      const overlapStart = Math.max(taskStart, intervalStart);
+      const overlapEnd = Math.min(taskEnd, intervalEnd);
+      if (overlapEnd - overlapStart > 0.001) {
+        resourceUsage[i] += performers;
       }
     }
   });
 
-  const maxPeople = Math.max(...resourceUsage, 5); // Минимум 5 для масштаба
+  const maxPeople = Math.max(...resourceUsage, limit);
 
-  // 2. Рисуем фон графика
-  ctx.fillStyle = '#f8fafc';
-  ctx.fillRect(startX, startY, chartWidth - startX, RESOURCE_CHART_HEIGHT);
+  // 2. Фон и область графика
+  ctx.fillStyle = '#f8fafc'; // Светло-серый фон для всей зоны
+  ctx.fillRect(-scrollOffset.x, startY - 20, chartWidth + Math.abs(scrollOffset.x), RESOURCE_CHART_HEIGHT);
 
-  // 3. Рисуем столбики
-  resourceUsage.forEach((count, day) => {
-    const barHeight = (count / maxPeople) * (RESOURCE_CHART_HEIGHT - 40);
-    const x = startX + day * dayWidth;
-    const y = totalHeight - barHeight - 20;
-
-    ctx.fillStyle = count > 10 ? '#ef4444' : '#3b82f6'; // Красный, если людей > 10
-    ctx.fillRect(x + 2, y, dayWidth - 4, barHeight);
-
-    // Подпись количества людей сверху столбика
-    if (dayWidth > 20 && count > 0) {
-      ctx.fillStyle = '#1e293b';
-      ctx.font = '10px sans-serif';
-      ctx.fillText(count, x + dayWidth/2, y - 5);
-    }
-  });
   
-  // Заголовок
-  ctx.fillStyle = '#1f2937';
-  ctx.font = 'bold 12px sans-serif';
-  ctx.fillText('Загрузка ресурсов (чел.)', 15, startY + 25);
+
+  // 3. Подпись графика слева (фиксированная при скролле)
+  ctx.save();
+  ctx.fillStyle = '#1e293b';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.textAlign = 'left';
+  // Рисуем заголовок в "замороженной" области меток
+  ctx.fillText('Ресурсы', 15, startY + 15);
+  ctx.fillText('(чел. / день)', 15, startY + 30);
+  ctx.restore();
+
+  // 4. Отрисовка столбиков и нижней оси
+  resourceUsage.forEach((count, day) => {
+    const displayCount = Math.round(count * 10) / 10;
+    const barHeight = (displayCount / maxPeople) * chartAreaHeight;
+    const x = startX + day * dayWidth;
+    const y = startY + chartAreaHeight - barHeight + 10;
+
+    // Сетка (вертикальные линии дней)
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x, startY);
+    ctx.lineTo(x, startY + chartAreaHeight + 10);
+    ctx.stroke();
+
+    if (displayCount > 0) {
+      // Столбик
+      const gradient = ctx.createLinearGradient(x, y, x, startY + chartAreaHeight + 10);
+      if (displayCount > limit) {
+        gradient.addColorStop(0, '#f87171');
+        gradient.addColorStop(1, '#dc2626');
+      } else {
+        gradient.addColorStop(0, '#60a5fa');
+        gradient.addColorStop(1, '#2563eb');
+      }
+   
+      ctx.fillStyle = gradient;
+      ctx.fillRect(x + 2, y, dayWidth - 4, barHeight);
+
+      // Число сверху столбика
+      if (dayWidth > 20) {
+        ctx.fillStyle = '#1e293b';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(displayCount, x + dayWidth/2, y - 5);
+      }
+    }
+    if (dayWidth > 25) {
+        ctx.fillStyle = day % 5 === 0 ? '#1f2937' : '#6b7280';
+        ctx.font = day % 5 === 0 ? 'bold 12px sans-serif' : '11px sans-serif';
+        ctx.fillText(day, x, startY + chartAreaHeight + 25);
+      }
+  });
+
+  // Горизонтальная линия оси
+  ctx.strokeStyle = '#94a3b8';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(startX, startY + chartAreaHeight + 10);
+  ctx.lineTo(chartWidth, startY + chartAreaHeight + 10);
+  ctx.stroke();
+  
+  
 };
+  
+
+
 
   const drawGanttChart = () => {
     const canvas = canvasRef.current;
@@ -292,7 +424,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
     const containerWidth = container.offsetWidth;
     const containerHeight = container.offsetHeight;
     const chartWidth = Math.max(containerWidth, LABEL_WIDTH + projectDuration * DAY_WIDTH * scale);
-    const chartHeight = Math.max(containerHeight, HEADER_HEIGHT + localTasks.length * ROW_HEIGHT + RESOURCE_CHART_HEIGHT);
+    const chartHeight = showResources ? Math.max(containerHeight, HEADER_HEIGHT + localTasks.length * ROW_HEIGHT + RESOURCE_CHART_HEIGHT) : Math.max(containerHeight, HEADER_HEIGHT + localTasks.length * ROW_HEIGHT);
 
    
     const dpr = window.devicePixelRatio || 1;
@@ -328,7 +460,10 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
     
    
     drawBorders(ctx, chartWidth, chartHeight);
-    drawResourceChart(ctx, chartWidth, chartHeight);
+    if(showResources){
+      drawResourceChart(ctx, chartWidth, chartHeight);
+    }
+    
     drawGrid(ctx, chartWidth, chartHeight);
     ctx.restore();
   };
@@ -336,7 +471,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
   const drawTimeScale = (ctx, chartWidth) => {
     const timeScaleY = 0;
     const timeScaleHeight = HEADER_HEIGHT;
-
+    console.log("Весь объект results:", results);
     
     ctx.fillStyle = HEADER_COLOR;
     ctx.fillRect(-scrollOffset.x, timeScaleY, chartWidth + Math.abs(scrollOffset.x), timeScaleHeight);
@@ -366,7 +501,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
     const dayWidth = DAY_WIDTH * scale;
 
   
-    for (let day = 0; day <= projectDuration; day++) {
+    for (let day = 0; day <= projectDuration + 1; day++) {
       const x = startX + day * dayWidth;
       
       if (x > chartWidth + Math.abs(scrollOffset.x)) break;
@@ -513,7 +648,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
             ctx.fillStyle = '#1e40af';
             ctx.font = '10px sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText(`Резерв: ${task.totalFloat}д`, floatStartX + floatWidth / 2, taskY + TASK_HEIGHT / 2);
+            ctx.fillText(`Резерв: ${task.totalFloat.toFixed(2)}д`, floatStartX + floatWidth / 2, taskY + TASK_HEIGHT / 2);
           }
         }
       }
@@ -532,7 +667,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
   const startX = LABEL_WIDTH;
   const dayWidth = DAY_WIDTH * scale;
   
-  for (let day = 0; day <= projectDuration; day++) {
+  for (let day = 0; day <= projectDuration + 1; day++) {
     const x = startX + day * dayWidth;
     if (x > chartWidth + Math.abs(scrollOffset.x)) break;
     if (x < -Math.abs(scrollOffset.x)) continue;
@@ -598,7 +733,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
 
   const exportToSVG = () => {
     const containerWidth = containerRef.current?.offsetWidth || 800;
-    const chartWidth = Math.max(containerWidth, LABEL_WIDTH + projectDuration * DAY_WIDTH * scale);
+    const chartWidth = Math.max(containerWidth, LABEL_WIDTH + (projectDuration + 1) * DAY_WIDTH * scale);
     const chartHeight = HEADER_HEIGHT + tasks.length * ROW_HEIGHT;
 
     let svg = `<svg width="${chartWidth}" height="${chartHeight}" xmlns="http://www.w3.org/2000/svg">`;
@@ -770,7 +905,29 @@ const handleUndo = useCallback(() => {
   // Удаляем этот снимок из истории, так как мы его уже использовали
   setHistory(prev => prev.slice(0, -1));
 }, [history]);
+useEffect(() => {
+  const handleKeyDown = (e) => {
+    // Проверяем Ctrl + Z или Cmd + Z (для Mac)
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      // Предотвращаем стандартное действие браузера (если оно есть)
+      e.preventDefault();
+      
+      // Вызываем отмену, только если есть что отменять
+      if (history.length > 0) {
+        handleUndo();
+      }
+    }
+  };
 
+  // Вешаем слушатель на весь документ
+  document.addEventListener('keydown', handleKeyDown);
+
+  // Обязательно убираем слушатель при размонтировании компонента, 
+  // чтобы не было утечек памяти и лишних срабатываний
+  return () => {
+    document.removeEventListener('keydown', handleKeyDown);
+  };
+}, [handleUndo, history.length]); // Перезапускаем, если изменилась функция или длина истории
 // Функция "Сброс всех изменений"
 const handleReset = useCallback(() => {
   if (window.confirm("Вы уверены, что хотите сбросить все ручные изменения к исходному расчету?")) {
@@ -783,26 +940,7 @@ const handleReset = useCallback(() => {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-4 p-3 bg-slate-50 border-b border-slate-200">
-      <div className="flex bg-white border border-slate-300 rounded overflow-hidden">
-        <button
-  onClick={handleUndo}
-  disabled={history.length === 0}
-  className={`px-4 py-2 text-sm flex items-center gap-2 transition-colors rounded-l border-r ${
-    history.length === 0 
-      ? 'bg-slate-50 text-slate-400 cursor-not-allowed border-slate-200' 
-      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
-  }`}
->
-  <span>↩️</span> Шаг назад
-</button>
-      </div>
-
-      <button
-        onClick={handleReset}
-        className="px-4 py-2 text-sm font-medium text-red-600 bg-white border border-red-200 rounded hover:bg-red-50 transition-colors flex items-center gap-2"
-      >
-        <span>🗑️</span> Сбросить все изменения
-      </button>
+      
       
       {/* Здесь можно оставить ваши старые кнопки масштаба, если они были */}
       <div className="text-xs text-slate-500 ml-auto">
@@ -821,6 +959,11 @@ const handleReset = useCallback(() => {
           <Button onClick={zoomOut} size="sm" variant="outline" className="hover:bg-gray-50">
             <ZoomOut className="h-4 w-4" />
           </Button>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Move className="h-4 w-4" />
+              <span>Масштаб: {(scale * 100).toFixed(0)}%</span>
+              {isPanning && <Badge variant="secondary">Перемещение</Badge>}
+          </div>
           <div className="border-l border-gray-200 mx-2"></div>
           <Button onClick={exportToPNG} size="sm" variant="outline" className="hover:bg-blue-50">
             <Download className="h-4 w-4 mr-2" />
@@ -841,52 +984,80 @@ const handleReset = useCallback(() => {
         <CardContent className="p-4">
           <div className="flex flex-wrap gap-4 items-center">
             <div className="flex items-center gap-3">
-              <Button
-                size="sm"
-                variant={showCriticalPath ? "default" : "outline"}
-                onClick={() => setShowCriticalPath(!showCriticalPath)}
-                className="transition-all duration-200"
-              >
-                {showCriticalPath ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                <span className="ml-2">Критический путь</span>
-              </Button>
-              
-              <Button
-                size="sm"
-                variant={showTimeScale ? "default" : "outline"}
-                onClick={() => setShowTimeScale(!showTimeScale)}
-                className="transition-all duration-200"
-              >
-                {showTimeScale ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                <span className="ml-2">Временная шкала</span>
-              </Button>
-              
-              <Button
-                size="sm"
-                variant={showResources ? "default" : "outline"}
-                onClick={() => setShowResources(!showResources)}
-                className="transition-all duration-200"
-              >
-                {showResources ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                <span className="ml-2">Ресурсы</span>
-              </Button>
+    <Button
+      size="sm"
+      variant={showCriticalPath ? "default" : "outline"}
+      onClick={() => setShowCriticalPath(!showCriticalPath)}
+      className="transition-all duration-200"
+    >
+      {showCriticalPath ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
+      Критический путь
+    </Button>
+    
+    <Button
+      size="sm"
+      variant={showTimeScale ? "default" : "outline"}
+      onClick={() => setShowTimeScale(!showTimeScale)}
+      className="transition-all duration-200"
+    >
+      {showTimeScale ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
+      Временная шкала
+    </Button>
+    
+    <Button
+      size="sm"
+      variant={showResources ? "default" : "outline"}
+      onClick={() => setShowResources(!showResources)}
+      className="transition-all duration-200"
+    >
+      {showResources ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
+      Ресурсы
+    </Button>
 
-              <Button 
-                size="sm"
-                variant={showTimeReserves ? "default" : "outline"}
-                onClick={() => setShowTimeReserves(!showTimeReserves)}
-                className="transition-all duration-200"
-              >
-                {showTimeReserves ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                <span className="ml-2">Резервы времени</span>
-              </Button>
-            </div>
+    <Button 
+      size="sm"
+      variant={showTimeReserves ? "default" : "outline"}
+      onClick={() => setShowTimeReserves(!showTimeReserves)}
+      className="transition-all duration-200"
+    >
+      {showTimeReserves ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
+      Резервы времени
+    </Button>
+  </div>
+
+  {/* Этот элемент создаст пустое пространство и сдвинет следующие кнопки вправо */}
+  <div className="flex-grow" />
+
+  {/* Правая группа кнопок управления историей */}
+  <div className="flex items-center gap-3">
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={handleUndo}
+      disabled={history.length === 0}
+      className="transition-all duration-200"
+    >
+      <RotateCcw className="h-4 w-4 mr-2" />
+      Шаг назад
+      {history.length > 0 && (
+        <Badge variant="secondary" className="ml-2 px-1 py-0 h-4 text-[10px]">
+          {history.length}
+        </Badge>
+      )}
+    </Button>
+
+    <Button
+      size="sm"
+      variant="destructive"
+      onClick={handleReset}
+      className="transition-all duration-200"
+    >
+      <RotateCcw className="h-4 w-4 mr-2" /> {/* Или иконка Trash2 из lucide */}
+      Сбросить изменения
+    </Button>
+  </div>
             
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Move className="h-4 w-4" />
-              <span>Масштаб: {(scale * 100).toFixed(0)}%</span>
-              {isPanning && <Badge variant="secondary">Перемещение</Badge>}
-            </div>
+            
           </div>
         </CardContent>
       </Card>
