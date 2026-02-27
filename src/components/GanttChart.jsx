@@ -38,7 +38,7 @@ const [localTasks, setLocalTasks] = useState([]);
 const [dragInfo, setDragInfo] = useState({ taskId: null, startX: 0, originalStart: 0 });
 
 // Постоянная высота графика ресурсов
-const RESOURCE_CHART_HEIGHT = 150; 
+const RESOURCE_CHART_HEIGHT = 300; 
 
 // Синхронизируем локальные задачи с входящими данными при загрузке
 useEffect(() => {
@@ -182,36 +182,48 @@ const getTaskSuccessors = (currentTask, allTasks) => {
 };
 
 // Основная функция каскадного обновления
-const updateCascade = (allTasks, movedTaskId, direction) => {
+const updateCascade = (allTasks, movedTaskId, direction, originalResults) => {
   const task = allTasks.find(t => t.id === movedTaskId);
   if (!task) return;
 
   if (direction === 'forward') {
-    // Толкаем ПОТОМКОВ (вправо)
+    // ТОЛКАЕМ ВПРАВО (Потомки)
     const taskEnd = task.earlyStart + task.duration;
     const successors = getTaskSuccessors(task, allTasks);
 
     successors.forEach(child => {
       if (child.earlyStart < taskEnd) {
         child.earlyStart = taskEnd;
-        updateCascade(allTasks, child.id, 'forward');
+        updateCascade(allTasks, child.id, 'forward', originalResults);
       }
     });
   } else if (direction === 'backward') {
-    // Тянем ПРЕДКОВ (влево) — только если это необходимо по логике
-    // Но обычно в планировании задача просто "упирается" в предков
-    // Поэтому при движении влево мы просто ограничиваем текущую задачу
+    // ТЯНЕМ ВЛЕВО (Предки)
+    const taskStart = task.earlyStart;
     const predecessors = getTaskPredecessors(task, allTasks);
-    let maxPredEnd = 0;
-    
-    predecessors.forEach(p => {
-      const pEnd = p.earlyStart + p.duration;
-      if (pEnd > maxPredEnd) maxPredEnd = pEnd;
-    });
 
-    if (task.earlyStart < maxPredEnd) {
-      task.earlyStart = maxPredEnd;
-    }
+    predecessors.forEach(pred => {
+      // Идеальный финиш для предка - это начало текущей задачи
+      const targetFinish = taskStart;
+      const predOriginal = originalResults.find(t => t.id === pred.id);
+      
+      // Предка можно двигать назад только до его "законного" раннего старта
+      // Чтобы не сдвинуть критический путь или начало проекта
+      const minStart = predOriginal.earlyStart;
+      
+      if (pred.earlyStart + pred.duration > targetFinish) {
+        let newStart = targetFinish - pred.duration;
+        
+        // Ограничиваем, чтобы не уйти левее дозволенного
+        if (newStart < minStart) newStart = minStart;
+        
+        if (pred.earlyStart !== newStart) {
+          pred.earlyStart = newStart;
+          // Рекурсивно тянем предков этого предка
+          updateCascade(allTasks, pred.id, 'backward', originalResults);
+        }
+      }
+    });
   }
 };
 
@@ -236,32 +248,31 @@ const updateCascade = (allTasks, movedTaskId, direction) => {
     
     let newStart = dragInfo.originalStart + daysDelta;
 
-    // 1. ОГРАНИЧЕНИЕ СЛЕВА (Предки)
-    // Находим конец самого позднего предка
-    const predecessors = getTaskPredecessors(task, newTasks);
-    const minAllowedStart = predecessors.reduce((max, p) => 
-      Math.max(max, p.earlyStart + p.duration), 0);
-    
-    // Задача не может начаться раньше, чем закончатся предки 
-    // И не раньше своего первоначального минимального старта
-    newStart = Math.max(newStart, minAllowedStart, originalTask.earlyStart);
+    // ОГРАНИЧЕНИЕ: Самое раннее — это оригинальный Early Start задачи
+    // (потому что предки не могут уйти левее своих оригинальных позиций)
+    if (newStart < originalTask.earlyStart) {
+      newStart = originalTask.earlyStart;
+    }
 
-    // 2. ОГРАНИЧЕНИЕ СПРАВА (Критический путь / Резерв)
-    const maxReserve = originalTask.totalFloat || 0;
-    const maxAllowedStart = originalTask.earlyStart + maxReserve;
-    newStart = Math.min(newStart, maxAllowedStart);
+    // ОГРАНИЧЕНИЕ: Самое позднее — это Early Start + Резерв (Late Start)
+    const maxAllowedStart = originalTask.earlyStart + (originalTask.totalFloat || 0);
+    if (newStart > maxAllowedStart) {
+      newStart = maxAllowedStart;
+    }
 
     if (task.earlyStart === newStart) return prev;
 
+    const direction = newStart > task.earlyStart ? 'forward' : 'backward';
     task.earlyStart = newStart;
 
-    // 3. КАСКАД ВПЕРЕД (Толкаем тех, кто впереди)
-    updateCascade(newTasks, task.id, 'forward');
+    // Запускаем каскад в зависимости от направления движения
+    updateCascade(newTasks, task.id, direction, results.tasks);
 
-    // Пересчитываем визуальные резервы для всех
+    
     newTasks.forEach(t => {
       const orig = results.tasks.find(ot => ot.id === t.id);
-      t.totalFloat = Math.max(0, orig.lateFinish - (t.earlyStart + t.duration));
+      const currentFinish = t.earlyStart + t.duration;
+      t.totalFloat = Math.max(0, Math.round((orig.lateFinish - currentFinish) * 10) / 10);
     });
 
     return newTasks;
@@ -312,25 +323,26 @@ const updateCascade = (allTasks, movedTaskId, direction) => {
 
 const drawResourceChart = (ctx, chartWidth, totalHeight) => {
   const limit = resourceLimit || 10;
-  // Настройки оформления
-  const CHART_PADDING_TOP = 30; // Отступ от Ганта до графика ресурсов
-  const AXIS_LABEL_SPACE = 25;  // Место под цифры дней снизу
-  const startY = totalHeight - RESOURCE_CHART_HEIGHT + CHART_PADDING_TOP;
+  
+  // Увеличиваем отступы, чтобы график не жался к краям
+  const TOP_PADDING = 60;    // Место для заголовка "Ресурсная гистограмма"
+  const BOTTOM_PADDING = 50; // Место для подписей дней и оси X
+  const LEFT_AXIS_SPACE = 60; // Место для вертикальной подписи оси Y
+  
+  const startY = totalHeight - RESOURCE_CHART_HEIGHT + TOP_PADDING;
   const startX = LABEL_WIDTH;
   const dayWidth = DAY_WIDTH * scale;
-  const chartAreaHeight = RESOURCE_CHART_HEIGHT - CHART_PADDING_TOP - AXIS_LABEL_SPACE - 20;
+  const chartAreaHeight = RESOURCE_CHART_HEIGHT - TOP_PADDING - BOTTOM_PADDING;
 
-  // 1. Логика расчета (оставляем без изменений, как просили)
+  // 1. Логика расчета (без изменений)
   const resourceUsage = new Array(Math.ceil(projectDuration) + 1).fill(0);
   localTasks.forEach(task => {
     const taskStart = task.earlyStart;
     const taskEnd = task.earlyStart + task.duration;
     const performers = task.numberOfPerformers || 0;
     for (let i = 0; i < resourceUsage.length; i++) {
-      const intervalStart = i;
-      const intervalEnd = i + 1;
-      const overlapStart = Math.max(taskStart, intervalStart);
-      const overlapEnd = Math.min(taskEnd, intervalEnd);
+      const overlapStart = Math.max(taskStart, i);
+      const overlapEnd = Math.min(taskEnd, i + 1);
       if (overlapEnd - overlapStart > 0.001) {
         resourceUsage[i] += performers;
       }
@@ -339,75 +351,104 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
 
   const maxPeople = Math.max(...resourceUsage, limit);
 
-  // 2. Фон и область графика
-  ctx.fillStyle = '#f8fafc'; // Светло-серый фон для всей зоны
-  ctx.fillRect(-scrollOffset.x, startY - 20, chartWidth + Math.abs(scrollOffset.x), RESOURCE_CHART_HEIGHT);
-
-  
-
-  // 3. Подпись графика слева (фиксированная при скролле)
-  ctx.save();
-  ctx.fillStyle = '#1e293b';
+  // --- 2. ЗАГОЛОВОК-РАЗДЕЛИТЕЛЬ ---
+  // Рисуем заголовок посередине, перекрывая пунктирные линии сетки
+  const titleText = "Ресурсная гистограмма";
   ctx.font = 'bold 16px sans-serif';
-  ctx.textAlign = 'left';
-  // Рисуем заголовок в "замороженной" области меток
-  ctx.fillText('Ресурсы', 15, startY + 15);
-  ctx.fillText('(чел. / день)', 15, startY + 30);
+  const titleWidth = ctx.measureText(titleText).width;
+  const centerX = startX + (chartWidth - startX) / 2;
+  const titleY = startY - 30;
+
+  // "Прерываем" линию: рисуем белый прямоугольник под текстом
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(centerX - (titleWidth / 2) - 10, titleY - 15, titleWidth + 20, 25);
+  
+  ctx.fillStyle = '#1e293b';
+  ctx.textAlign = 'center';
+  ctx.fillText(titleText, centerX, titleY);
+
+  // --- 3. ПОДПИСИ ОСЕЙ ---
+  ctx.save();
+  // Ось Y (вертикально слева)
+  ctx.translate(startX - 45, startY + chartAreaHeight / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillStyle = '#64748b';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Кол-во занятых исполнителей, чел.', 0, 0);
   ctx.restore();
 
-  // 4. Отрисовка столбиков и нижней оси
+  // Ось X (внизу справа)
+  ctx.fillStyle = '#64748b';
+  ctx.font = 'italic 12px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText('Время, дни', chartWidth - 10, startY + chartAreaHeight + 40);
+
+  // --- 4. ОТРИСОВКА СТОЛБИКОВ ---
   resourceUsage.forEach((count, day) => {
     const displayCount = Math.round(count * 10) / 10;
     const barHeight = (displayCount / maxPeople) * chartAreaHeight;
     const x = startX + day * dayWidth;
-    const y = startY + chartAreaHeight - barHeight + 10;
+    const y = startY + chartAreaHeight - barHeight;
 
-    // Сетка (вертикальные линии дней)
+    // Вертикальная сетка дней (пунктир или тонкая линия)
     ctx.strokeStyle = '#e2e8f0';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
     ctx.moveTo(x, startY);
-    ctx.lineTo(x, startY + chartAreaHeight + 10);
+    ctx.lineTo(x, startY + chartAreaHeight);
     ctx.stroke();
 
     if (displayCount > 0) {
-      // Столбик
-      const gradient = ctx.createLinearGradient(x, y, x, startY + chartAreaHeight + 10);
+      // Градиент столбика (как в старой версии)
+      const gradient = ctx.createLinearGradient(x, y, x, startY + chartAreaHeight);
       if (displayCount > limit) {
-        gradient.addColorStop(0, '#f87171');
-        gradient.addColorStop(1, '#dc2626');
+        gradient.addColorStop(0, '#f87171'); // Красный верх
+        gradient.addColorStop(1, '#dc2626'); // Темно-красный низ
       } else {
-        gradient.addColorStop(0, '#60a5fa');
-        gradient.addColorStop(1, '#2563eb');
+        gradient.addColorStop(0, '#60a5fa'); // Голубой верх
+        gradient.addColorStop(1, '#2563eb'); // Синий низ
       }
    
       ctx.fillStyle = gradient;
       ctx.fillRect(x + 2, y, dayWidth - 4, barHeight);
 
-      // Число сверху столбика
-      if (dayWidth > 20) {
-        ctx.fillStyle = '#1e293b';
-        ctx.font = 'bold 10px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(displayCount, x + dayWidth/2, y - 5);
-      }
+      // Число людей сверху столбика
+      ctx.fillStyle = '#1e293b';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(displayCount, x + dayWidth / 2, y - 5);
     }
-    if (dayWidth > 25) {
-        ctx.fillStyle = day % 5 === 0 ? '#1f2937' : '#6b7280';
-        ctx.font = day % 5 === 0 ? 'bold 12px sans-serif' : '11px sans-serif';
-        ctx.fillText(day, x, startY + chartAreaHeight + 25);
-      }
+
+    // Нумерация КАЖДОГО дня (жирным каждый 5-й)
+    if (dayWidth > 15) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = day % 5 === 0 ? '#1f2937' : '#6b7280';
+      ctx.font = day % 5 === 0 ? 'bold 12px sans-serif' : '11px sans-serif';
+      ctx.fillText(day, x, startY + chartAreaHeight + 25);
+    }
   });
 
-  // Горизонтальная линия оси
+  // --- 5. ЛИНИИ ОСЕЙ И ЛИМИТ ---
   ctx.strokeStyle = '#94a3b8';
   ctx.lineWidth = 2;
+  
+  // Основная горизонтальная ось
   ctx.beginPath();
-  ctx.moveTo(startX, startY + chartAreaHeight + 10);
-  ctx.lineTo(chartWidth, startY + chartAreaHeight + 10);
+  ctx.moveTo(startX, startY + chartAreaHeight);
+  ctx.lineTo(chartWidth, startY + chartAreaHeight);
   ctx.stroke();
-  
-  
+
+  // Линия лимита (если она выше 0)
+  const limitY = startY + chartAreaHeight - (limit / maxPeople) * chartAreaHeight;
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.strokeStyle = '#ef4444';
+  ctx.beginPath();
+  ctx.moveTo(startX, limitY);
+  ctx.lineTo(chartWidth, limitY);
+  ctx.stroke();
+  ctx.restore();
 };
   
 
@@ -459,12 +500,16 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
     });
     
    
+    
+    
+    drawGrid(ctx, chartWidth, chartHeight);
+
     drawBorders(ctx, chartWidth, chartHeight);
+
     if(showResources){
       drawResourceChart(ctx, chartWidth, chartHeight);
     }
     
-    drawGrid(ctx, chartWidth, chartHeight);
     ctx.restore();
   };
 
@@ -1115,10 +1160,15 @@ const handleReset = useCallback(() => {
                 <div className="w-4 h-3 bg-red-500 rounded"></div>
                 <span>Критический путь</span>
               </div>
+              <div className="flex items-center gap-2">
+                <div className="w-0.5 h-3 bg-blue-500"></div>
+                <span>Фиктивные работы</span>
+              </div>
               <div className="flex items-center gap-2"> 
                 <div className="w-4 h-3 bg-blue-300 rounded"></div>
                 <span>Резервы времени</span>
               </div>
+
             </div>
           </div>
         </CardContent>
