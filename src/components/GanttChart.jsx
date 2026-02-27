@@ -27,6 +27,7 @@ const GanttChart = forwardRef(({ results, project, resourceLimit}, ref) => {
   const [showCriticalPath, setShowCriticalPath] = useState(true);
   const [showTimeScale, setShowTimeScale] = useState(true);
   const [showResources, setShowResources] = useState(true);
+  const [showDummyTasks, setShowDummyTasks] = useState(true);
   const [showTimeReserves, setShowTimeReserves] = useState(true); 
   const [scale, setScale] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
@@ -125,13 +126,51 @@ useEffect(() => {
 
   
   const handleWheel = useCallback((e) => {
-    if (e.ctrlKey) {
-      e.preventDefault();
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      setScale(prev => Math.max(0.2, Math.min(prev * delta, 5)));
-    }
-  }, []);
+  if (e.ctrlKey) {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setScale(prev => Math.max(0.2, Math.min(prev * delta, 5)));
+    return;
+  }
 
+  e.preventDefault();
+
+  setScrollOffset(prev => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return prev;
+
+    // --- РАЗМЕРЫ ЭКРАНА (ВИДИМАЯ ОБЛАСТЬ) ---
+    const viewWidth = container.offsetWidth;
+    const viewHeight = container.offsetHeight;
+
+    // --- ПОЛНЫЕ РАЗМЕРЫ КОНТЕНТА ---
+    // Ширина: Названия (320px) + Дни проекта * ширина дня * масштаб
+    const fullContentWidth = LABEL_WIDTH + (projectDuration * DAY_WIDTH * scale);
+    
+    // Высота: Шапка (80px) + Задачи * 40px + График ресурсов (если есть)
+    const tasksHeight = localTasks.length * ROW_HEIGHT;
+    const resourcesHeight = showResources ? RESOURCE_CHART_HEIGHT : 0;
+    const fullContentHeight = HEADER_HEIGHT + tasksHeight + resourcesHeight;
+
+    // --- ЛИМИТЫ (Отрицательные значения) ---
+    // Мы не можем скроллить влево/вниз больше чем разница между контентом и экраном
+    // Если контент меньше экрана, лимит должен быть 0
+    const minX = Math.min(0, viewWidth - fullContentWidth - 100); // 100px запас справа
+    const minY = Math.min(0, viewHeight - fullContentHeight - 50);  // 50px запас снизу
+
+    // --- СКОРОСТЬ И НАПРАВЛЕНИЕ ---
+    const scrollSpeed = 0.8; 
+    const dx = e.shiftKey ? e.deltaY * scrollSpeed : 0;
+    const dy = e.shiftKey ? 0 : e.deltaY * scrollSpeed;
+
+    // --- РЕЗУЛЬТАТ С ЗАЖИМОМ (CLAMP) ---
+    return {
+      x: Math.min(0, Math.max(prev.x - dx, minX)),
+      y: Math.min(0, Math.max(prev.y - dy, minY))
+    };
+  });
+}, [scale, projectDuration, localTasks.length, showResources, LABEL_WIDTH, HEADER_HEIGHT, ROW_HEIGHT, DAY_WIDTH]);
 
   const handleMouseDown = useCallback((e) => {
   const rect = canvasRef.current.getBoundingClientRect();
@@ -319,7 +358,7 @@ const updateCascade = (allTasks, movedTaskId, direction, originalResults) => {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [localTasks, showCriticalPath, showTimeScale, showResources, showTimeReserves, scale, scrollOffset]);
+  }, [localTasks, showCriticalPath, showTimeScale, showResources, showTimeReserves,showDummyTasks, scale, scrollOffset]);
 
 const drawResourceChart = (ctx, chartWidth, totalHeight) => {
   const limit = resourceLimit || 10;
@@ -455,6 +494,13 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
 
 
   const drawGanttChart = () => {
+    const visibleTasks = localTasks.filter(task => {
+      if (!showDummyTasks) {
+      const isDummy = task.duration === 0 || task.name.toLowerCase().includes('фиктивная');
+      return !isDummy;
+    }
+    return true;
+    });
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container || tasks.length === 0) return;
@@ -465,7 +511,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
     const containerWidth = container.offsetWidth;
     const containerHeight = container.offsetHeight;
     const chartWidth = Math.max(containerWidth, LABEL_WIDTH + projectDuration * DAY_WIDTH * scale);
-    const chartHeight = showResources ? Math.max(containerHeight, HEADER_HEIGHT + localTasks.length * ROW_HEIGHT + RESOURCE_CHART_HEIGHT) : Math.max(containerHeight, HEADER_HEIGHT + localTasks.length * ROW_HEIGHT);
+    const chartHeight = showResources ? Math.max(containerHeight, HEADER_HEIGHT + visibleTasks.length * ROW_HEIGHT + RESOURCE_CHART_HEIGHT) : Math.max(containerHeight, HEADER_HEIGHT + visibleTasks.length * ROW_HEIGHT);
 
    
     const dpr = window.devicePixelRatio || 1;
@@ -486,7 +532,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
     ctx.fillStyle = BACKGROUND_COLOR;
     ctx.fillRect(-scrollOffset.x, -scrollOffset.y, chartWidth, chartHeight);
 
-   
+    
     if (showTimeScale) {
       drawTimeScale(ctx, chartWidth);
     }
@@ -495,7 +541,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
     
     
     
-    localTasks.forEach((task, index) => {
+    visibleTasks.forEach((task, index) => {
       drawTask(ctx, task, index, chartWidth);
     });
     
@@ -509,7 +555,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
     if(showResources){
       drawResourceChart(ctx, chartWidth, chartHeight);
     }
-    
+
     ctx.restore();
   };
 
@@ -1057,6 +1103,15 @@ const handleReset = useCallback(() => {
     >
       {showResources ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
       Ресурсы
+    </Button>
+    <Button
+      size="sm"
+      variant={showDummyTasks ? "default" : "outline"}
+      onClick={() => setShowDummyTasks(!showDummyTasks)}
+      className="transition-all duration-200"
+    >
+      {showDummyTasks ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
+      Фиктивные работы
     </Button>
 
     <Button 
