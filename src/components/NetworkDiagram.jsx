@@ -275,6 +275,7 @@ useImperativeHandle(ref, () => ({
   const createNodes = (tasks) => {
     const nodeMap = new Map();
     const criticalPath = results.criticalPath || [];
+    const eventTimes = results.eventTimes || {};
 
     tasks.forEach(task => {
       const [from, to] = task.id.split('-').map(Number);
@@ -321,13 +322,15 @@ useImperativeHandle(ref, () => ({
       n.isCritical = incidentCritical.has(n.id);
     });
 
-    positionNodes(nodes, tasks);
+    positionNodes(nodes, tasks, eventTimes);
     return nodes;
   };
 
-  const positionNodes = (nodes, tasks) => {
+  const positionNodes = (nodes, tasks, eventTimes = {}) => {
     const levels = new Map();
     const visited = new Set();
+    const earlyTimes = eventTimes.early || {};
+    const lateTimes = eventTimes.late || {};
     
     const findLevel = (nodeId, level = 0) => {
       if (visited.has(nodeId)) return levels.get(nodeId) || 0;
@@ -384,15 +387,24 @@ useImperativeHandle(ref, () => ({
         if (levelNodes.length > 1) {
           node.y += (Math.random() - 0.5) * 30;
         }
-        
-        const relatedTasks = tasks.filter(task => {
-          const [from, to] = task.id.split('-').map(Number);
-          return from === node.id || to === node.id;
-        });
-        
-        if (relatedTasks.length > 0) {
-          node.earlyTime = Math.max(...relatedTasks.map(task => task.earlyStart || 0));
-          node.lateTime = Math.min(...relatedTasks.map(task => task.lateFinish || task.duration));
+
+        const nodeEarlyTime = Number(earlyTimes[node.id]);
+        const nodeLateTime = Number(lateTimes[node.id]);
+        const hasEventTimes = Number.isFinite(nodeEarlyTime) && Number.isFinite(nodeLateTime);
+
+        if (hasEventTimes) {
+          node.earlyTime = nodeEarlyTime;
+          node.lateTime = nodeLateTime;
+        } else {
+          const relatedTasks = tasks.filter(task => {
+            const [from, to] = task.id.split('-').map(Number);
+            return from === node.id || to === node.id;
+          });
+
+          if (relatedTasks.length > 0) {
+            node.earlyTime = Math.max(...relatedTasks.map(task => task.earlyStart || 0));
+            node.lateTime = Math.min(...relatedTasks.map(task => task.lateFinish || task.duration));
+          }
         }
       });
     });
@@ -495,12 +507,12 @@ useImperativeHandle(ref, () => ({
       
       if (node.earlyTime !== undefined) {
         ctx.textAlign = 'center';
-        ctx.fillText(`ES: ${node.earlyTime.toFixed(1)}`, x, y - radius - 20);
+        ctx.fillText(`Tр: ${node.earlyTime.toFixed(1)}`, x, y - radius - 20);
       }
       
       if (node.lateTime !== undefined) {
         ctx.textAlign = 'center';
-        ctx.fillText(`LS: ${node.lateTime.toFixed(1)}`, x, y + radius + 25);
+        ctx.fillText(`Tп: ${node.lateTime.toFixed(1)}`, x, y + radius + 25);
       }
     }
   };

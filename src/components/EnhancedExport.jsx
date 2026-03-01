@@ -133,16 +133,23 @@ const EnhancedExport = ({ results, project, tasks = [], ganttChartRef, networkDi
       setExportStatus('Нет данных для экспорта');
       return;
     }
-    const headers = ['№', 'Код работы', 'Наименование работы', 'Продолжительность, дни', 'Количество исполнителей', 'Трудоемкость, н-ч', 'Раннее начало', 'Раннее окончание', 'Позднее начало', 'Позднее окончание', 'Полный резерв времени', 'Частный резерв времени', 'Критическая работа'];
+    const headers = ['№', 'Код работы', 'Наименование работы', 'Продолжительность, дни', 'Количество исполнителей', 'Трудоемкость, н-ч', 'Ранний срок наступления предшествующего события', 'Раннее окончание', 'Ранний срок наступления последующего события', 'Позднее начало', 'Поздний срок наступления предшествующего события', 'Поздний срок наступления последующего события', 'Резерв времени последующего события', 'Полный резерв времени', 'Частный резерв времени', 'Критическая работа'];
     const csvContent = [
       headers.join(';'),
       ...(results?.tasks || []).map((task, index) => {
         const taskIdAsFormula = `="${task.id}"`;
         return [
           index + 1, taskIdAsFormula, `"${task.name}"`, task.duration, task.numberOfPerformers,
-          task.laborIntensity || 0, formatNumberForCSV(task.earlyStart), formatNumberForCSV(task.earlyFinish),
-          formatNumberForCSV(task.lateStart), formatNumberForCSV(task.lateFinish),
-          formatNumberForCSV(task.totalFloat), formatNumberForCSV(task.freeFloat),
+          task.laborIntensity || 0,
+          formatNumberForCSV(task.earlyEventTimeI ?? task.earlyStart),
+          formatNumberForCSV(task.earlyFinish),
+          formatNumberForCSV(task.earlyEventTimeJ),
+          formatNumberForCSV(task.lateStart),
+          formatNumberForCSV(task.lateEventTimeI),
+          formatNumberForCSV(task.lateEventTimeJ ?? task.lateFinish),
+          formatNumberForCSV(task.eventReserveJ),
+          formatNumberForCSV(task.totalFloat),
+          formatNumberForCSV(task.freeFloat),
           (!task.isDummy && task.isCritical) ? 'Да' : 'Нет'
         ].join(';');
       })

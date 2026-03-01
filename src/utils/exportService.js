@@ -43,7 +43,7 @@ const createTaskListTable = (tasks) => {
 };
 
 const createReportTable = (results) => {
-  const tableHeaders = ["ID", "Наименование", "Длит.", "Трудоем.", "Исп.", "Ран. нач.", "Ран. ок.", "Позд. нач.", "Позд. ок.", "Полн. рез.", "Част. рез.", "Крит."];
+  const tableHeaders = ["ID", "Наименование", "Длит.", "Трудоем.", "Исп.", "Tр i", "Ран. ок.", "Tр j", "Позд. нач.", "Tп i", "Tп j", "R j", "Полн. рез.", "Част. рез.", "Крит."];
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: [
@@ -51,9 +51,15 @@ const createReportTable = (results) => {
       ...results.tasks.map(task => {
         const rowData = [
           task.id, task.name, task.duration.toString(), (task.laborIntensity || 0).toString(), task.numberOfPerformers.toString(),
-          task.earlyStart?.toFixed(2) || '0.00', task.earlyFinish?.toFixed(2) || '0.00',
-          task.lateStart?.toFixed(2) || '0.00', task.lateFinish?.toFixed(2) || '0.00',
-          task.totalFloat?.toFixed(2) || '0.00', task.freeFloat?.toFixed(2) || '0.00',
+          (task.earlyEventTimeI ?? task.earlyStart)?.toFixed(2) || '0.00',
+          task.earlyFinish?.toFixed(2) || '0.00',
+          task.earlyEventTimeJ?.toFixed(2) || '0.00',
+          task.lateStart?.toFixed(2) || '0.00',
+          task.lateEventTimeI?.toFixed(2) || '0.00',
+          (task.lateEventTimeJ ?? task.lateFinish)?.toFixed(2) || '0.00',
+          task.eventReserveJ?.toFixed(2) || '0.00',
+          task.totalFloat?.toFixed(2) || '0.00',
+          task.freeFloat?.toFixed(2) || '0.00',
           (!task.isDummy && task.isCritical) ? 'Да' : 'Нет',
         ];
         return new TableRow({
