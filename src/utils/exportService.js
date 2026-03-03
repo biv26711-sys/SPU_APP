@@ -232,10 +232,10 @@ export const generateAndSaveWordReport = async ({ baseline, optimized }) => {
     
     const isNetworkDiagram = title.includes("Сетевой график");
     const isGanttDiagram = title.includes("Диаграмма Ганта");
-    const maxWidth = isGanttDiagram ? 940 : 760;
-    const maxHeight = isGanttDiagram ? 560 : 320;
-    const fallbackWidth = isGanttDiagram ? 940 : 760;
-    const fallbackHeight = isGanttDiagram ? 560 : 320;
+    const maxWidth = isGanttDiagram ? 680 : 760;
+    const maxHeight = isGanttDiagram ? 380 : 320;
+    const fallbackWidth = isGanttDiagram ? 680 : 760;
+    const fallbackHeight = isGanttDiagram ? 380 : 320;
     const { width: newWidth, height: newHeight } =
       width > 1 && height > 1
         ? fitImageToBox(width, height, maxWidth, maxHeight)
