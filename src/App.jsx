@@ -80,6 +80,8 @@ function App() {
   const [appZoom, setAppZoom] = useState(1);
   const networkDiagramRef = useRef(null);
   const ganttChartRef = useRef(null);
+  const networkExportRef = useRef(null);
+  const ganttExportRef = useRef(null);
   const userGuideRef = useRef(null);
   const [isExportingWord, setIsExportingWord] = useState(false);
   const { loadAutosavedData, clearAutosavedData, hasAutosavedData } = useAutosave(project, calculationResults);
@@ -249,12 +251,22 @@ function App() {
   setIsExportingWord(true);
 
   try {
-    const networkImagePromise = networkDiagramRef.current?.getAsBase64();
-    const ganttImagePromise = ganttChartRef.current?.getAsBase64();
+    await new Promise(resolve => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(resolve);
+      });
+    });
 
-    const [networkImage, ganttImage] = await Promise.all([
+    const networkSource = networkExportRef.current || networkDiagramRef.current;
+    const ganttSource = ganttExportRef.current || ganttChartRef.current;
+    const networkImagePromise = networkSource?.getAsBase64();
+    const ganttImagePromise = ganttSource?.getAsBase64();
+    const ganttImagesPromise = ganttSource?.getPaginatedBase64?.() || [];
+
+    const [networkImage, ganttImage, ganttImages] = await Promise.all([
       networkImagePromise,
       ganttImagePromise,
+      ganttImagesPromise,
     ]);
 
     const baselineData = baselinePlan
@@ -269,6 +281,7 @@ function App() {
       results: calculationResults,
       networkImage: networkImage,
       ganttImage: ganttImage,
+      ganttImages: ganttImages,
     };
 
     await generateAndSaveWordReport({
@@ -1424,6 +1437,8 @@ function App() {
                     tasks={project.tasks}
                     ganttChartRef={ganttChartRef}
                     networkDiagramRef={networkDiagramRef}
+                    ganttExportRef={ganttExportRef}
+                    networkExportRef={networkExportRef}
                     hoursPerDay={hoursPerDay}
                   />
               </TabsContent>
@@ -1601,13 +1616,18 @@ function App() {
        <UserGuide ref={userGuideRef} />
         <GostViewer open={isGostModalOpen} onOpenChange={setGostModalOpen} />
        {calculationResults && (
-  <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', zIndex: -1 }}>
+  <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', zIndex: -1, width: '1600px', background: '#ffffff' }}>
     <NetworkDiagram
-      ref={networkDiagramRef}
+      ref={networkExportRef}
       results={calculationResults}
       hoursPerDay={hoursPerDay}
     />
-    <GanttChart ref={ganttChartRef} results={calculationResults} project={project} />
+    <GanttChart
+      ref={ganttExportRef}
+      results={calculationResults}
+      project={project}
+      resourceLimit={resourceLimit}
+    />
   </div>
 )}
     </div>

@@ -70,54 +70,64 @@ export class SPUCalculation {
   calculateEarlyStartAndFinish() {
     const fromTo = [...new Set(this.tasks.flatMap(t => [t.from, t.to]))];
 
-    const incoming = {};
     const outgoing = {};
     
     fromTo.forEach(node => {
-      incoming[node] = [];
       outgoing[node] = [];
     });
 
     this.tasks.forEach(task => {
-      incoming[task.to].push(task);
       outgoing[task.from].push(task);
     });
 
     const sortedNodes = this.sortNodes(fromTo, outgoing);
 
-    const earlyEventTime = {}; 
+    const earlyEventTime = {};
     fromTo.forEach(node => {
       earlyEventTime[node] = 0;
     });
 
     sortedNodes.forEach(node => {
       outgoing[node].forEach(task => {
-        task.ES = earlyEventTime[node]; 
-        task.EF = task.ES + task.duration;
-        earlyEventTime[task.to] = Math.max(earlyEventTime[task.to] || 0, task.EF);
+        const candidateFinish = earlyEventTime[node] + task.duration;
+        earlyEventTime[task.to] = Math.max(earlyEventTime[task.to], candidateFinish);
       });
     });
 
-    const lateEventTime = {}; 
-    const projectDuration = Math.max(...Object.values(earlyEventTime));
-    
+    const projectDuration = Math.max(0, ...Object.values(earlyEventTime));
+    const lateEventTime = {};
+
     fromTo.forEach(node => {
       lateEventTime[node] = projectDuration;
     });
 
     const reversedNodes = [...sortedNodes].reverse();
-    
+
     reversedNodes.forEach(node => {
-      incoming[node].forEach(task => {
-        task.LF = lateEventTime[node]; 
-        task.LS = task.LF - task.duration; 
-        lateEventTime[task.from] = Math.min(lateEventTime[task.from], task.LS); 
-      });
+      if (outgoing[node].length === 0) {
+        lateEventTime[node] = Math.min(lateEventTime[node], projectDuration);
+        return;
+      }
+
+      lateEventTime[node] = Math.min(
+        ...outgoing[node].map(task => lateEventTime[task.to] - task.duration)
+      );
+    });
+
+    const eventReserve = {};
+
+    fromTo.forEach(node => {
+      eventReserve[node] = lateEventTime[node] - earlyEventTime[node];
     });
 
     this.tasks.forEach(task => {
-      task.totalFloat = task.LS - task.ES; 
-      task.freeFloat = earlyEventTime[task.to] - task.EF; 
+      task.ES = earlyEventTime[task.from];
+      task.EF = task.ES + task.duration;
+      task.LF = lateEventTime[task.to];
+      task.LS = task.LF - task.duration;
+
+      task.totalFloat = task.LF - task.ES - task.duration;
+      task.freeFloat = earlyEventTime[task.to] - task.ES - task.duration;
     });
 
     return {
@@ -126,7 +136,8 @@ export class SPUCalculation {
       criticalPath: this.findCriticalPath(),
       nodes: fromTo,
       earlyEventTime,
-      lateEventTime
+      lateEventTime,
+      eventReserve
     };
   }
 
@@ -221,6 +232,11 @@ export class SPUCalculation {
 
       const calculation = new SPUCalculation(spuTasks, { hoursPerDay });
       const result = calculation.calculateEarlyStartAndFinish();
+      const eventTimes = {
+        early: result.earlyEventTime,
+        late: result.lateEventTime,
+        reserve: result.eventReserve
+      };
 
       const calculatedTasks = result.tasks.map(spuTask => {
         const sourceTask = tasks.find(t => t.id === spuTask.id);
@@ -243,13 +259,17 @@ export class SPUCalculation {
         earlyEventTimeI: result.earlyEventTime[spuTask.from], 
         earlyEventTimeJ: result.earlyEventTime[spuTask.to], 
         lateEventTimeI: result.lateEventTime[spuTask.from], 
-        lateEventTimeJ: result.lateEventTime[spuTask.to] 
-      }});
+        lateEventTimeJ: result.lateEventTime[spuTask.to],
+        eventReserveJ: result.eventReserve[spuTask.to]
+      };
+    });
+
 
       return {
         tasks: calculatedTasks,
         projectDuration: result.projectDuration,
         criticalPath: result.criticalPath,
+        eventTimes,
         isValid: true,
         errors: []
       };

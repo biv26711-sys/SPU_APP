@@ -22,7 +22,7 @@ import {
 import { format, addDays, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-const GanttChart = forwardRef(({ results, project, resourceLimit}, ref) => {
+const GanttChart = forwardRef(({ results, project, resourceLimit, compactForExport = false }, ref) => {
   const [history, setHistory] = useState([]);
   const [showCriticalPath, setShowCriticalPath] = useState(true);
   const [showTimeScale, setShowTimeScale] = useState(true);
@@ -56,52 +56,115 @@ useEffect(() => {
   
  useImperativeHandle(ref, () => ({
   getAsBase64: () => {
-    if (!results || !results.tasks || !results.tasks.length) {
-      console.error("Нет данных для генерации диаграммы Ганта.");
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      console.error("Диаграмма Ганта еще не отрисована.");
       return null;
     }
 
     try {
-      // Создаем новый canvas для полного рендеринга
-      const offscreenCanvas = document.createElement('canvas');
-      const ctx = offscreenCanvas.getContext('2d');
+      drawGanttChart();
+      const maxExportWidth = 2200;
+      if (canvas.width <= maxExportWidth) {
+        return canvas.toDataURL('image/png', 1.0);
+      }
 
-      // Рассчитываем реальные размеры всего графика без прокрутки
-      const fullChartWidth = LABEL_WIDTH + projectDuration * DAY_WIDTH;
-      const fullChartHeight = HEADER_HEIGHT + results.tasks.length * ROW_HEIGHT;
-      
-      const dpr = 2; // Увеличиваем разрешение для четкости
-      offscreenCanvas.width = fullChartWidth * dpr;
-      offscreenCanvas.height = fullChartHeight * dpr;
-      ctx.scale(dpr, dpr);
+      const exportScale = maxExportWidth / canvas.width;
+      const exportCanvas = document.createElement('canvas');
+      const exportCtx = exportCanvas.getContext('2d');
+      if (!exportCtx) {
+        return canvas.toDataURL('image/png', 1.0);
+      }
 
-      // Сохраняем текущие настройки, чтобы не влиять на отображение
-      const originalScale = scale;
-      const originalOffset = scrollOffset;
-      
-      // Временно сбрасываем масштаб и сдвиг для полного рендеринга
-      setScale(1);
-      setScrollOffset({ x: 0, y: 0 });
-      
-      // Рисуем на временном canvas
-      ctx.fillStyle = BACKGROUND_COLOR;
-      ctx.fillRect(0, 0, fullChartWidth, fullChartHeight);
-      if (showTimeScale) drawTimeScale(ctx, fullChartWidth);
-      drawGrid(ctx, fullChartWidth, fullChartHeight);
-      results.tasks.forEach((task, index) => {
-        drawTask(ctx, task, index, fullChartWidth);
-      });
-      drawBorders(ctx, fullChartWidth, fullChartHeight);
+      exportCanvas.width = Math.max(1, Math.round(canvas.width * exportScale));
+      exportCanvas.height = Math.max(1, Math.round(canvas.height * exportScale));
+      exportCtx.imageSmoothingEnabled = true;
+      exportCtx.imageSmoothingQuality = 'high';
+      exportCtx.fillStyle = BACKGROUND_COLOR;
+      exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+      exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
 
-      // Возвращаем оригинальные настройки масштаба и сдвига
-      setScale(originalScale);
-      setScrollOffset(originalOffset);
-
-      return offscreenCanvas.toDataURL('image/png', 1.0);
-
+      return exportCanvas.toDataURL('image/png', 1.0);
     } catch (e) {
       console.error("Ошибка при создании base64 из диаграммы Ганта:", e);
       return null;
+    }
+  },
+  getPaginatedBase64: () => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      console.error("Диаграмма Ганта еще не отрисована.");
+      return [];
+    }
+
+    try {
+      drawGanttChart();
+
+      const styleWidth = parseFloat(canvas.style.width) || canvas.clientWidth || 1;
+      const pixelRatio = canvas.width / Math.max(1, styleWidth);
+      const labelWidthPx = Math.max(1, Math.round(LABEL_WIDTH * pixelRatio));
+      const totalTimelinePx = Math.max(0, canvas.width - labelWidthPx);
+      const actualTimelineCssWidth = Math.max(1, (projectDuration + 1) * DAY_WIDTH * scale);
+      const actualTimelinePx = Math.max(
+        1,
+        Math.min(totalTimelinePx, Math.round(actualTimelineCssWidth * pixelRatio))
+      );
+      const preferredSliceCssWidth = Math.max(600, 18 * DAY_WIDTH * scale);
+      const preferredSlicePx = Math.max(1, Math.round(preferredSliceCssWidth * pixelRatio));
+      const pageCount = Math.max(1, Math.ceil(actualTimelinePx / preferredSlicePx));
+      const balancedSlicePx = Math.max(1, Math.ceil(actualTimelinePx / pageCount));
+
+      const pages = [];
+
+      for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+        const startPx = pageIndex * balancedSlicePx;
+        const sliceWidthPx = Math.min(balancedSlicePx, actualTimelinePx - startPx);
+        if (sliceWidthPx <= 0) {
+          continue;
+        }
+        const pageCanvas = document.createElement('canvas');
+        const pageCtx = pageCanvas.getContext('2d');
+        if (!pageCtx) {
+          return [canvas.toDataURL('image/png', 1.0)];
+        }
+
+        pageCanvas.width = labelWidthPx + sliceWidthPx;
+        pageCanvas.height = canvas.height;
+
+        pageCtx.fillStyle = BACKGROUND_COLOR;
+        pageCtx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+
+        pageCtx.drawImage(
+          canvas,
+          0,
+          0,
+          labelWidthPx,
+          canvas.height,
+          0,
+          0,
+          labelWidthPx,
+          canvas.height
+        );
+
+        pageCtx.drawImage(
+          canvas,
+          labelWidthPx + startPx,
+          0,
+          sliceWidthPx,
+          canvas.height,
+          labelWidthPx,
+          0,
+          sliceWidthPx,
+          canvas.height
+        );
+
+        pages.push(pageCanvas.toDataURL('image/png', 1.0));
+      }
+
+      return pages;
+    } catch (e) {
+      console.error("Ошибка при создании страниц диаграммы Ганта:", e);
+      return [];
     }
   },
 }));
@@ -123,6 +186,25 @@ useEffect(() => {
   const NORMAL_COLOR = '#3b82f6';
   const BACKGROUND_COLOR = '#ffffff';
   const HEADER_COLOR = '#f8fafc';
+
+  const formatChartNumber = (value) => {
+    const number = Number(value);
+    if (!Number.isFinite(number) || Math.abs(number) < 0.005) {
+      return '0.00';
+    }
+    return number.toFixed(2);
+  };
+
+  useEffect(() => {
+    if (!compactForExport) return;
+
+    const usableWidth = 1500 - LABEL_WIDTH;
+    const timelineWidth = Math.max(1, projectDuration * DAY_WIDTH);
+    const fittedScale = Math.min(1, Math.max(0.12, usableWidth / timelineWidth));
+
+    setScale(fittedScale);
+    setScrollOffset({ x: 0, y: 0 });
+  }, [compactForExport, projectDuration]);
 
   
   const handleWheel = useCallback((e) => {
@@ -724,7 +806,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
       }
 
       
-      if (showTimeReserves && task.totalFloat !== undefined && task.totalFloat > 0) {
+      if (showTimeReserves && task.totalFloat !== undefined && task.totalFloat > 0.005) {
         const floatStartX = startX + taskWidth;
         const floatWidth = task.totalFloat * DAY_WIDTH * scale;
 
@@ -739,7 +821,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
             ctx.fillStyle = '#1e40af';
             ctx.font = '10px sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText(`Резерв: ${task.totalFloat.toFixed(2)}д`, floatStartX + floatWidth / 2, taskY + TASK_HEIGHT / 2);
+            ctx.fillText(`Резерв: ${formatChartNumber(task.totalFloat)}д`, floatStartX + floatWidth / 2, taskY + TASK_HEIGHT / 2);
           }
         }
       }

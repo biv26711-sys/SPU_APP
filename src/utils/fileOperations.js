@@ -1,5 +1,12 @@
 import logger from './logger.js';
 
+const formatExportNumber = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  if (Math.abs(number) < 0.005) return '0.00';
+  return number.toFixed(2);
+};
+
 export const exportProjectToJSON = (project, calculationResults = null) => {
   try {
     const exportData = {
@@ -43,10 +50,13 @@ export const exportResultsToCSV = (tasks) => {
       'Трудоемкость (н-ч)',
       'Количество исполнителей',
       'Предшественники',
-      'Раннее начало',
+      'Ранний срок наступления предшествующего события',
       'Раннее окончание',
+      'Ранний срок наступления последующего события',
       'Позднее начало',
-      'Позднее окончание',
+      'Поздний срок наступления предшествующего события',
+      'Поздний срок наступления последующего события',
+      'Резерв времени последующего события',
       'Полный резерв',
       'Частный резерв',
       'Критическая работа'
@@ -61,12 +71,15 @@ export const exportResultsToCSV = (tasks) => {
         task.laborIntensity,
         task.numberOfPerformers,
         `"${task.predecessors.join(', ')}"`,
-        task.earlyStart?.toFixed(2) || '',
-        task.earlyFinish?.toFixed(2) || '',
-        task.lateStart?.toFixed(2) || '',
-        task.lateFinish?.toFixed(2) || '',
-        task.totalFloat?.toFixed(2) || '',
-        task.freeFloat?.toFixed(2) || '',
+        formatExportNumber(task.earlyEventTimeI ?? task.earlyStart),
+        formatExportNumber(task.earlyFinish),
+        formatExportNumber(task.earlyEventTimeJ),
+        formatExportNumber(task.lateStart),
+        formatExportNumber(task.lateEventTimeI),
+        formatExportNumber(task.lateEventTimeJ ?? task.lateFinish),
+        formatExportNumber(task.eventReserveJ),
+        formatExportNumber(task.totalFloat),
+        formatExportNumber(task.freeFloat),
         task.isCritical ? 'Да' : 'Нет'
       ].join(','))
     ].join('\n');
@@ -108,10 +121,13 @@ export const exportResultsToExcel = (tasks, projectInfo) => {
         'Трудоемкость (н-ч)',
         'Количество исполнителей',
         'Предшественники',
-        'Раннее начало',
+        'Ранний срок наступления предшествующего события',
         'Раннее окончание',
+        'Ранний срок наступления последующего события',
         'Позднее начало',
-        'Позднее окончание',
+        'Поздний срок наступления предшествующего события',
+        'Поздний срок наступления последующего события',
+        'Резерв времени последующего события',
         'Полный резерв',
         'Частный резерв',
         'Критическая работа'
@@ -123,12 +139,15 @@ export const exportResultsToExcel = (tasks, projectInfo) => {
         task.laborIntensity,
         task.numberOfPerformers,
         task.predecessors.join(', '),
-        task.earlyStart?.toFixed(2) || '',
-        task.earlyFinish?.toFixed(2) || '',
-        task.lateStart?.toFixed(2) || '',
-        task.lateFinish?.toFixed(2) || '',
-        task.totalFloat?.toFixed(2) || '',
-        task.freeFloat?.toFixed(2) || '',
+        formatExportNumber(task.earlyEventTimeI ?? task.earlyStart),
+        formatExportNumber(task.earlyFinish),
+        formatExportNumber(task.earlyEventTimeJ),
+        formatExportNumber(task.lateStart),
+        formatExportNumber(task.lateEventTimeI),
+        formatExportNumber(task.lateEventTimeJ ?? task.lateFinish),
+        formatExportNumber(task.eventReserveJ),
+        formatExportNumber(task.totalFloat),
+        formatExportNumber(task.freeFloat),
         task.isCritical ? 'Да' : 'Нет'
       ])
     ];

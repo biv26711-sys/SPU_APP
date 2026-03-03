@@ -19,6 +19,9 @@ import { generateAndSaveWordReport } from '@/utils/exportService';
 const formatNumberForCSV = (num) => {
   const number = Number(num);
   if (Number.isFinite(number)) {
+    if (Math.abs(number) < 0.005) {
+      return '0,00';
+    }
     return number.toFixed(2).replace('.', ',');
   }
   return '0,00';
@@ -30,6 +33,8 @@ const EnhancedExport = ({
   tasks = [],
   ganttChartRef,
   networkDiagramRef,
+  ganttExportRef,
+  networkExportRef,
   hoursPerDay = 8,
 }) => {
   const [isExporting, setIsExporting] = useState(false);
@@ -64,12 +69,22 @@ const EnhancedExport = ({
   setExportStatus('Подготовка данных для отчета...');
 
   try {
-    const networkImagePromise = networkDiagramRef.current?.getAsBase64();
-    const ganttImagePromise = ganttChartRef.current?.getAsBase64();
+    await new Promise(resolve => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(resolve);
+      });
+    });
 
-    const [networkImage, ganttImage] = await Promise.all([
+    const networkSource = networkExportRef?.current || networkDiagramRef.current;
+    const ganttSource = ganttExportRef?.current || ganttChartRef.current;
+    const networkImagePromise = networkSource?.getAsBase64();
+    const ganttImagePromise = ganttSource?.getAsBase64();
+    const ganttImagesPromise = ganttSource?.getPaginatedBase64?.() || [];
+
+    const [networkImage, ganttImage, ganttImages] = await Promise.all([
       networkImagePromise,
-      ganttImagePromise
+      ganttImagePromise,
+      ganttImagesPromise,
     ]);
     
     setExportStatus('Создание Word документа...');
@@ -85,6 +100,7 @@ const EnhancedExport = ({
       results: results,
       networkImage: networkImage,
       ganttImage: ganttImage,
+      ganttImages: ganttImages,
     };
 
     await generateAndSaveWordReport({
@@ -140,16 +156,23 @@ const EnhancedExport = ({
       setExportStatus('Нет данных для экспорта');
       return;
     }
-    const headers = ['№', 'Код работы', 'Наименование работы', 'Продолжительность, дни', 'Количество исполнителей', 'Трудоемкость, н-ч', 'Раннее начало', 'Раннее окончание', 'Позднее начало', 'Позднее окончание', 'Полный резерв времени', 'Частный резерв времени', 'Критическая работа'];
+    const headers = ['№', 'Код работы', 'Наименование работы', 'Продолжительность, дни', 'Количество исполнителей', 'Трудоемкость, н-ч', 'Ранний срок наступления предшествующего события', 'Раннее окончание', 'Ранний срок наступления последующего события', 'Позднее начало', 'Поздний срок наступления предшествующего события', 'Поздний срок наступления последующего события', 'Резерв времени последующего события', 'Полный резерв времени', 'Частный резерв времени', 'Критическая работа'];
     const csvContent = [
       headers.join(';'),
       ...(results?.tasks || []).map((task, index) => {
         const taskIdAsFormula = `="${task.id}"`;
         return [
           index + 1, taskIdAsFormula, `"${task.name}"`, task.duration, task.numberOfPerformers,
-          task.laborIntensity || 0, formatNumberForCSV(task.earlyStart), formatNumberForCSV(task.earlyFinish),
-          formatNumberForCSV(task.lateStart), formatNumberForCSV(task.lateFinish),
-          formatNumberForCSV(task.totalFloat), formatNumberForCSV(task.freeFloat),
+          task.laborIntensity || 0,
+          formatNumberForCSV(task.earlyEventTimeI ?? task.earlyStart),
+          formatNumberForCSV(task.earlyFinish),
+          formatNumberForCSV(task.earlyEventTimeJ),
+          formatNumberForCSV(task.lateStart),
+          formatNumberForCSV(task.lateEventTimeI),
+          formatNumberForCSV(task.lateEventTimeJ ?? task.lateFinish),
+          formatNumberForCSV(task.eventReserveJ),
+          formatNumberForCSV(task.totalFloat),
+          formatNumberForCSV(task.freeFloat),
           (!task.isDummy && task.isCritical) ? 'Да' : 'Нет'
         ].join(';');
       })
@@ -160,16 +183,25 @@ const EnhancedExport = ({
   };
 
   const exportCanvasToPNG = (componentRef, fileName, errorMsg) => {
-     const canvas = componentRef?.current?.getCanvas();
-
-    if (!canvas) {
+    const component = componentRef?.current;
+    if (!component) {
       setExportStatus(errorMsg);
       return;
     }
+
     try {
+      const dataUrl =
+        (typeof component.getAsBase64 === 'function' && component.getAsBase64()) ||
+        (typeof component.getCanvas === 'function' && component.getCanvas()?.toDataURL('image/png', 1.0));
+
+      if (!dataUrl) {
+        setExportStatus(errorMsg);
+        return;
+      }
+
       const link = document.createElement('a');
       link.download = `${fileName}_${new Date().toISOString().split('T')[0]}.png`;
-      link.href = canvas.toDataURL('image/png', 1.0);
+      link.href = dataUrl;
       link.click();
       setExportStatus(`${fileName} успешно экспортирован в PNG.`);
     } catch (error) {
