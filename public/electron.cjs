@@ -32,8 +32,8 @@ function createWindow() {
       enableRemoteModule: false,
       preload: path.join(__dirname, 'preload.cjs') 
     },
-    icon: path.join(__dirname, 'icon.png'),
-    show: false, 
+    icon: path.join(__dirname, 'icon.ico'),
+    show: true, 
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default'
   });
 
@@ -45,14 +45,9 @@ function createWindow() {
   mainWindow.loadURL(startUrl);
 
   
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-    
-    
-    if (isDev) {
-      mainWindow.webContents.openDevTools();
-    }
-  });
+  if (isDev) {
+  mainWindow.webContents.openDevTools();
+}
 
   
   mainWindow.on('closed', () => {
@@ -172,7 +167,7 @@ function createMenu() {
           label: 'Загрузить пример',
           submenu: [
             {
-              label: 'Базовый пример (старый)',
+              label: 'Базовый пример',
               click: () => {
                 mainWindow.webContents.send('menu-load-example-basic');
               }
@@ -283,22 +278,25 @@ function createMenu() {
 
 app.whenReady().then(() => {
   try {
- 
     const dbPath = app.isPackaged
-   
-       ? path.join(process.resourcesPath, 'db', 'db2_final.db') 
-      : path.join(__dirname, '..', 'db', 'db2_final.db'); 
+      ? path.join(process.resourcesPath, 'db', 'db2_final.db')
+      : path.join(__dirname, '..', 'db', 'db2_final.db');
+
+    console.log('Проверяю БД:', dbPath);
 
     if (!fs.existsSync(dbPath)) {
-      throw new Error(`Файл базы данных не найден по пути: ${dbPath}`);
+      throw new Error(`Файл базы данных не найден: ${dbPath}`);
     }
 
     openDB(dbPath);
     console.log('DB opened:', dbPath);
+
+    createWindow();
   } catch (e) {
-    console.warn('Не удалось открыть БД:', e.message);
+    console.error('Не удалось открыть БД:', e);
+    dialog.showErrorBox('Ошибка БД', String(e.message || e));
+    app.quit();
   }
-  createWindow();
 });
 
 app.on('activate', () => {

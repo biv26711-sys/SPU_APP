@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Trash2, Plus, Edit } from 'lucide-react';
 import { createTask } from '../types/index.js';
+import { calcDurationDays, calcLaborHours } from '../utils/time.js';
 import TaskNameSuggest from './TaskNameSuggest';
 import {
   AlertDialog,
@@ -23,16 +24,20 @@ import {
 
 
 
-const HOURS_PER_DAY = 6;
-
-function computeDurationDays(laborHours, performers, hoursPerDay = HOURS_PER_DAY) {
-  const perf = Math.max(1, parseInt(performers) || 1);
-  const hours = Math.max(0, parseFloat(laborHours) || 0);
-  const d = hours / (hoursPerDay * perf);
-  return Math.max(0.1, Math.ceil(d * 10) / 10); 
-}
-
-const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange, isLimitExceeded, maxPerformers, lastNumericLimit, onLastNumericLimitChange  }) => {
+const TaskInput = ({
+  tasks,
+  onTasksChange,
+  resourceLimit,
+  onResourceLimitChange,
+  isLimitExceeded,
+  maxPerformers,
+  lastNumericLimit,
+  onLastNumericLimitChange,
+  hoursPerDay,
+  onHoursPerDayChange,
+  calculatedEdgeIdByTaskId = {},
+  showCalculatedEdgeIds = false,
+}) => {
  const [localResourceLimit, setLocalResourceLimit] = useState(resourceLimit);
   const [isConfirmModalOpen, setConfirmModalOpen] = useState(false);
   const [formData, setFormData] = useState({
@@ -43,14 +48,153 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
     numberOfPerformers: '1',
     predecessors: ''
   });
+  const [predecessorSelections, setPredecessorSelections] = useState(['']);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
   useEffect(() => {
-  setLocalResourceLimit(resourceLimit);
-}, [resourceLimit]);
+    setLocalResourceLimit(resourceLimit);
+  }, [resourceLimit]);
+
+  useEffect(() => {
+    const laborHours = parseFloat(formData.laborIntensity) || 0;
+    if (!laborHours) return;
+    const duration = calcDurationDays(laborHours, formData.numberOfPerformers, hoursPerDay);
+    if (Number.isFinite(duration)) {
+      setFormData(prev => ({ ...prev, duration: String(duration) }));
+    }
+  }, [hoursPerDay, formData.laborIntensity, formData.numberOfPerformers]);
 
   const [editingTask, setEditingTask] = useState(null);
 
   const [missingReq, setMissingReq] = useState([]); 
   const [formError, setFormError] = useState(''); 
+  const existingTaskIds = new Set(
+    (Array.isArray(tasks) ? tasks : [])
+      .map(task => String(task?.id ?? '').trim())
+      .filter(Boolean)
+  );
+  const currentTaskId = String(formData.id || '').trim();
+  const editingTaskIndex = editingTask
+    ? tasks.findIndex(task => String(task?.id) === String(editingTask.id))
+    : -1;
+  const availablePredecessorOptions = tasks
+    .map((task, index) => ({
+      id: String(task?.id ?? '').trim(),
+      name: String(task?.name ?? ''),
+      index
+    }))
+    .filter(task => {
+      if (!task.id) return false;
+      if (task.id === currentTaskId) return false;
+      if (editingTaskIndex >= 0) {
+        return task.index < editingTaskIndex;
+      }
+      return true;
+    });
+  const availablePredecessorIdSet = new Set(availablePredecessorOptions.map(task => task.id));
+  const MAX_PREDECESSORS = 4;
+  const isTaskIdentityReady = Boolean(String(formData.id || '').trim() && String(formData.name || '').trim());
+  const sliderProgress = Math.max(0, Math.min(100, ((Number(hoursPerDay) - 1) / 23) * 100));
+  const selectedPredecessors = predecessorSelections
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  const hasEmptyPredecessorSelection = predecessorSelections.some(value => !String(value || '').trim());
+  const canAddPredecessorRow = !hasEmptyPredecessorSelection &&
+    predecessorSelections.length < MAX_PREDECESSORS &&
+    selectedPredecessors.length < MAX_PREDECESSORS &&
+    availablePredecessorOptions.some(task => !selectedPredecessors.includes(task.id));
+  const getVisiblePredecessors = (task) => {
+    const taskId = String(task?.id ?? '').trim();
+    const preds = Array.isArray(task?.predecessors) ? task.predecessors : [];
+    return Array.from(
+      new Set(
+        preds
+          .map(pred => String(pred ?? '').trim())
+          .filter(predId => predId && predId !== taskId && existingTaskIds.has(predId))
+      )
+    );
+  };
+
+  const handleHoursPerDayChange = (value) => {
+    const num = parseFloat(value);
+    if (!Number.isFinite(num)) return;
+    const next = Math.min(24, Math.max(1, num));
+    onHoursPerDayChange(next);
+  };
+
+  const toNaturalInt = (value) => {
+    const text = String(value ?? '').trim();
+    if (!/^\d+$/.test(text)) return null;
+    const n = Number(text);
+    if (!Number.isInteger(n) || n <= 0) return null;
+    return n;
+  };
+
+  const normalizeTaskPredecessors = (task) => {
+    if (Array.isArray(task?.predecessors)) {
+      return task.predecessors.map(p => String(p ?? '').trim()).filter(Boolean);
+    }
+    if (typeof task?.predecessors === 'string' && task.predecessors.trim()) {
+      return task.predecessors
+        .split(',')
+        .map(p => String(p ?? '').trim())
+        .filter(Boolean);
+    }
+    return [];
+  };
+
+  const shiftTaskIdsForInsertion = (tasksList, insertId) => {
+    return (Array.isArray(tasksList) ? tasksList : []).map(task => {
+      const currentIdText = String(task?.id ?? '').trim();
+      const currentIdNum = toNaturalInt(currentIdText);
+      const nextId = Number.isInteger(currentIdNum) && currentIdNum >= insertId
+        ? String(currentIdNum + 1)
+        : currentIdText;
+
+      const nextPreds = normalizeTaskPredecessors(task).map(predId => {
+        const predNum = toNaturalInt(predId);
+        if (!Number.isInteger(predNum) || predNum < insertId) return predId;
+        return String(predNum + 1);
+      });
+
+      return {
+        ...task,
+        id: nextId,
+        predecessors: nextPreds,
+        predecessorBindingMode: 'manual',
+      };
+    });
+  };
+
+  const shiftTaskIdsForDeletion = (tasksList, deletedId) => {
+    return (Array.isArray(tasksList) ? tasksList : []).map(task => {
+      const currentIdText = String(task?.id ?? '').trim();
+      const currentIdNum = toNaturalInt(currentIdText);
+      const nextId = Number.isInteger(currentIdNum) && currentIdNum > deletedId
+        ? String(currentIdNum - 1)
+        : currentIdText;
+
+      const nextPreds = Array.from(
+        new Set(
+          normalizeTaskPredecessors(task)
+            .map(predId => {
+              const predNum = toNaturalInt(predId);
+              if (!Number.isInteger(predNum)) return predId;
+              if (predNum === deletedId) return null;
+              if (predNum > deletedId) return String(predNum - 1);
+              return predId;
+            })
+            .filter(Boolean)
+        )
+      );
+
+      return {
+        ...task,
+        id: nextId,
+        predecessors: nextPreds,
+        predecessorBindingMode: 'manual',
+      };
+    });
+  };
 
   const handleInputChange = (field, value) => {
     setFormData(prev => {
@@ -58,21 +202,37 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
 
       if (field === 'numberOfPerformers' && next.laborIntensity) {
         const laborHours = parseFloat(next.laborIntensity) || 0;
-        next.duration = String(computeDurationDays(laborHours, value));
+        next.duration = String(calcDurationDays(laborHours, value, hoursPerDay));
+      } else if (field === 'numberOfPerformers' && next.duration) {
+        const durationDays = parseFloat(next.duration) || 0;
+        const laborHours = calcLaborHours(durationDays, value, hoursPerDay);
+        next.laborIntensity = laborHours ? String(laborHours) : '';
       }
       if (field === 'laborIntensity') {
         const laborHours = parseFloat(value) || 0;
-        next.duration = String(computeDurationDays(laborHours, next.numberOfPerformers));
+        next.duration = String(calcDurationDays(laborHours, next.numberOfPerformers, hoursPerDay));
+      }
+      if (field === 'duration') {
+        const durationDays = parseFloat(value) || 0;
+        const laborHours = calcLaborHours(durationDays, next.numberOfPerformers, hoursPerDay);
+        next.laborIntensity = laborHours ? String(laborHours) : '';
       }
       return next;
     });
 
     if (field === 'id' || field === 'name') setMissingReq([]); 
+    if (field === 'id') {
+      const nextId = String(value || '').trim();
+      if (nextId !== String(selectedTemplateId || '').trim()) {
+        setSelectedTemplateId('');
+      }
+    }
     setFormError(''); 
   };
 
   const handleNameText = (text) => { 
     setFormData(f => ({ ...f, name: text })); 
+    setSelectedTemplateId('');
     setMissingReq([]); 
     setFormError(''); 
   };
@@ -83,26 +243,62 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
     if (
       !String(formData.id).trim() || 
       !String(formData.name).trim() || 
-      !String(formData.duration).trim() || 
+      !String(formData.laborIntensity).trim() ||
       !String(formData.numberOfPerformers).trim() 
     ) {
       setFormError('Пожалуйста, заполните все обязательные поля'); 
       return;
     }
 
-    const predecessors = formData.predecessors
-      .split(',')
-      .map(p => p.trim())
-      .filter(Boolean);
+    const laborHours = parseFloat(formData.laborIntensity);
+    if (!Number.isFinite(laborHours) || laborHours <= 0) {
+      setFormError('Трудоемкость должна быть больше 0');
+      return;
+    }
 
-    const newTask = createTask(
+    const performersRaw = parseInt(formData.numberOfPerformers, 10);
+    if (!Number.isFinite(performersRaw) || performersRaw <= 0) {
+      setFormError('Количество исполнителей должно быть больше 0');
+      return;
+    }
+    const performers = performersRaw;
+    const calculatedDuration = calcDurationDays(laborHours, performers, hoursPerDay);
+    if (!Number.isFinite(calculatedDuration) || calculatedDuration <= 0) {
+      setFormError('Не удалось рассчитать продолжительность. Проверьте исходные данные.');
+      return;
+    }
+
+    const normalizedTemplateId = String(selectedTemplateId || '').trim();
+
+    const predecessors = Array.from(
+      new Set(
+        predecessorSelections
+          .map(p => String(p || '').trim())
+          .map(p => p.trim())
+          .filter(Boolean)
+      )
+    );
+    const invalidPredecessors = predecessors.filter(predId => !availablePredecessorIdSet.has(predId));
+    if (invalidPredecessors.length > 0) {
+      setFormError(`Недопустимые предшественники: ${invalidPredecessors.join(', ')}`);
+      return;
+    }
+    if (predecessors.length > MAX_PREDECESSORS) {
+      setFormError(`Можно указать не более ${MAX_PREDECESSORS} предшественников.`);
+      return;
+    }
+
+    const newTask = {
+      ...createTask(
       formData.id,
       formData.name,
-      parseFloat(formData.duration),
-      (formData.laborIntensity !== '' ? parseFloat(formData.laborIntensity) : null),
-      parseInt(formData.numberOfPerformers),
+      calculatedDuration,
+      laborHours,
+      performers,
       predecessors
-    );
+      ),
+      templateId: normalizedTemplateId || null,
+    };
 
     if (editingTask) {
       const updatedTasks = tasks.map(task =>
@@ -111,11 +307,28 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
       onTasksChange(updatedTasks);
       setEditingTask(null);
     } else {
-      if (tasks.some(task => task.id === formData.id)) {
-        setFormError('Работа с таким ID уже существует');
-        return;
+      const newTaskIdNum = toNaturalInt(formData.id);
+
+      if (Number.isInteger(newTaskIdNum)) {
+        const shiftedTasks = shiftTaskIdsForInsertion(tasks, newTaskIdNum);
+        const insertIndex = shiftedTasks.findIndex(task => {
+          const idNum = toNaturalInt(task?.id);
+          return Number.isInteger(idNum) && idNum >= newTaskIdNum;
+        });
+        const nextTasks = [...shiftedTasks];
+        if (insertIndex === -1) {
+          nextTasks.push(newTask);
+        } else {
+          nextTasks.splice(insertIndex, 0, newTask);
+        }
+        onTasksChange(nextTasks);
+      } else {
+        if (tasks.some(task => String(task?.id) === String(formData.id))) {
+          setFormError('Работа с таким ID уже существует');
+          return;
+        }
+        onTasksChange([...tasks, newTask]);
       }
-      onTasksChange([...tasks, newTask]);
     }
 
     setFormData({
@@ -126,19 +339,30 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
       numberOfPerformers: '1',
       predecessors: ''
     });
+    setPredecessorSelections(['']);
+    setSelectedTemplateId('');
     setMissingReq([]);
     setFormError(''); 
   };
 
   const handleEdit = (task) => {
+    const existingPreds = Array.from(
+      new Set(
+        (Array.isArray(task.predecessors) ? task.predecessors : [])
+          .map(p => String(p || '').trim())
+          .filter(Boolean)
+      )
+    );
     setFormData({
       id: task.id,
       name: task.name,
       duration: String(task.duration),
       laborIntensity: String(task.laborIntensity ?? ''),
       numberOfPerformers: String(task.numberOfPerformers),
-      predecessors: task.predecessors.join(', ')
+      predecessors: existingPreds.join(', ')
     });
+    setPredecessorSelections(existingPreds.length > 0 ? existingPreds : ['']);
+    setSelectedTemplateId(String(task?.templateId ?? ''));
     setEditingTask(task);
     setMissingReq([]);
     setFormError(''); 
@@ -146,8 +370,15 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
 
   const handleDelete = (taskId) => {
     if (confirm('Вы уверены, что хотите удалить эту задачу?')) {
-      const updatedTasks = tasks.filter(task => task.id !== taskId);
-      onTasksChange(updatedTasks);
+      const deletedTaskId = String(taskId ?? '').trim();
+      const deletedTaskNum = toNaturalInt(deletedTaskId);
+      const remainingTasks = tasks.filter(task => String(task?.id ?? '').trim() !== deletedTaskId);
+
+      if (Number.isInteger(deletedTaskNum)) {
+        onTasksChange(shiftTaskIdsForDeletion(remainingTasks, deletedTaskNum));
+      } else {
+        onTasksChange(remainingTasks);
+      }
     }
   };
 
@@ -161,6 +392,8 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
       numberOfPerformers: '1',
       predecessors: ''
     });
+    setPredecessorSelections(['']);
+    setSelectedTemplateId('');
     setMissingReq([]);
     setFormError(''); 
   };
@@ -205,7 +438,14 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
             </p>
           ) : (
             <div className="space-y-3 max-h-[600px] overflow-y-auto">
-              {tasks.map((task) => (
+              {tasks.map((task) => {
+                const visiblePredecessors = getVisiblePredecessors(task);
+                const taskId = String(task?.id ?? '').trim();
+                const calculatedEdgeId = String(calculatedEdgeIdByTaskId?.[taskId] ?? '').trim();
+                const shouldShowCalculatedEdgeId = showCalculatedEdgeIds &&
+                  calculatedEdgeId &&
+                  calculatedEdgeId !== taskId;
+                return (
                 <div
                   key={task.id}
                   className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
@@ -213,16 +453,21 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
                       <Badge variant="outline">{task.id}</Badge>
+                      {shouldShowCalculatedEdgeId && (
+                        <Badge variant="secondary" className="bg-sky-50 text-sky-700 border-sky-200">
+                          {calculatedEdgeId}
+                        </Badge>
+                      )}
                       <h3 className="font-medium">{task.name}</h3>
                       {task.isCritical && (
                         <Badge variant="destructive">Критический путь</Badge>
                       )}
                     </div>
                     <div className="text-sm text-muted-foreground space-y-1">
-                      <div>Длительность: {task.duration} дн.</div>
-                      <div>Трудоемкость: {task.laborIntensity} н-ч</div>
+                      <div>Длительность: {task.duration} (дн.)</div>
+                      <div>Трудоемкость: {task.laborIntensity} (н-ч)</div>
                       <div>Исполнители: {task.numberOfPerformers} чел.</div>
-                      <div>Предшественники: {task.predecessors.length > 0 ? task.predecessors.join(', ') : 'нет'}</div>
+                      <div>Предшественники: {visiblePredecessors.length > 0 ? visiblePredecessors.join(', ') : 'нет'}</div>
                     </div>
                   </div>
                   <div className="flex flex-col gap-2">
@@ -234,7 +479,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
                     </Button>
                   </div>
                 </div>
-              ))}
+              )})}
             </div>
           )}
         </CardContent>
@@ -243,14 +488,14 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
 
       <Card>
          <CardHeader>
-  <div className="flex items-center justify-between">
+  <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
     <CardTitle className="flex items-center gap-2">
       <Plus className="h-5 w-5" />
       {editingTask ? 'Редактировать работу' : 'Добавить работу'}
     </CardTitle>
     
-            <div className="flex items-center gap-4">
-  <Label className="text-sm text-muted-foreground">
+            <div className="flex items-center gap-3 flex-nowrap">
+  <Label className="text-sm text-muted-foreground whitespace-nowrap">
     Лимит исполнителей:
   </Label>
 
@@ -271,7 +516,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
     Безлимит
   </Button>
 
-  <div className="w-[150px]">
+  <div className="w-[150px] shrink-0">
     {resourceLimit !== Infinity && (
       <div className="flex items-center gap-2">
         <Input
@@ -302,6 +547,35 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
+              <Label htmlFor="hoursPerDay">Рабочий день (часы, глобально для проекта)</Label>
+              <div className="flex items-center gap-3">
+                <input
+                  id="hoursPerDay"
+                  type="range"
+                  min="1"
+                  max="24"
+                  step="0.5"
+                  value={hoursPerDay}
+                  onChange={(e) => handleHoursPerDayChange(e.target.value)}
+                  className="w-full hours-per-day-slider"
+                  style={{ '--slider-progress': `${sliderProgress}%` }}
+                />
+                <Input
+                  type="number"
+                  min="1"
+                  max="24"
+                  step="0.5"
+                  value={hoursPerDay}
+                  onChange={(e) => handleHoursPerDayChange(e.target.value)}
+                  className="h-8 w-20"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Влияет на расчет всех работ проекта, а не на одну выбранную задачу.
+              </p>
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="id">ID работы *</Label>
               <Input
                 id="id"
@@ -327,7 +601,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
                     : null;
 
                   const durationDays = laborHours != null
-                    ? String(computeDurationDays(laborHours, formData.numberOfPerformers))
+                    ? String(calcDurationDays(laborHours, formData.numberOfPerformers, hoursPerDay))
                     : formData.duration;
 
                   setFormData(f => ({
@@ -337,6 +611,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
                     laborIntensity: laborHours != null ? String(laborHours) : f.laborIntensity,
                     duration: durationDays,
                   }));
+                  setSelectedTemplateId(String(template?.id ?? ''));
 
                   const norm = Array.isArray(required) 
                     ? required 
@@ -369,11 +644,23 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
                     variant="secondary"
                     size="sm"
                     onClick={() => {
-                      const list = missingReq
-                        .map(x => x?.id ?? x?.code ?? x?.name) 
-                        .filter(Boolean) 
-                        .map(String); 
-                      setFormData(f => ({ ...f, predecessors: list.join(', ') }));
+                      const list = Array.from(new Set(
+                        missingReq
+                          .map(x => x?.id ?? x?.code ?? x?.name)
+                          .filter(Boolean)
+                          .map(String)
+                          .map(x => x.trim())
+                          .filter(Boolean)
+                      ));
+                      const filtered = list.filter(id => availablePredecessorIdSet.has(id));
+                      const limited = filtered.slice(0, MAX_PREDECESSORS);
+                      setPredecessorSelections(limited.length > 0 ? limited : ['']);
+                      setFormData(f => ({ ...f, predecessors: limited.join(', ') }));
+                      if (filtered.length > MAX_PREDECESSORS) {
+                        setFormError(`Можно указать не более ${MAX_PREDECESSORS} предшественников.`);
+                      } else {
+                        setFormError('');
+                      }
                     }}
                   >
                     Подставить в поле «Предшественники»
@@ -392,20 +679,22 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="duration">Продолжительность (дни) *</Label>
+              <Label htmlFor="duration">Продолжительность (дн.)</Label>
               <Input
                 id="duration"
                 type="number"
                 step="0.1"
                 min="0.1"
                 value={formData.duration}
-                onChange={(e) => handleInputChange('duration', e.target.value)}
                 placeholder="10"
+                readOnly
+                disabled={!isTaskIdentityReady}
+                title="Рассчитывается автоматически из трудоемкости, исполнителей и длительности рабочего дня"
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="laborIntensity">Трудоемкость (н-ч)</Label>
+              <Label htmlFor="laborIntensity">Трудоемкость (н-ч) *</Label>
               <Input
                 id="laborIntensity"
                 type="number"
@@ -414,6 +703,7 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
                 value={formData.laborIntensity}
                 onChange={(e) => handleInputChange('laborIntensity', e.target.value)}
                 placeholder="80"
+                disabled={!isTaskIdentityReady}
               />
             </div>
 
@@ -426,21 +716,121 @@ const TaskInput = ({ tasks, onTasksChange, resourceLimit, onResourceLimitChange,
                 value={formData.numberOfPerformers}
                 onChange={(e) => handleInputChange('numberOfPerformers', e.target.value)}
                 placeholder="2"
+                disabled={!isTaskIdentityReady}
               />
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="predecessors">Предшественники</Label>
-              <Input
-                id="predecessors"
-                value={formData.predecessors}
-                onChange={(e) => handleInputChange('predecessors', e.target.value)}
-                placeholder="1-2, 1-3"
-              />
+              <div id="predecessors" className="space-y-2">
+                {predecessorSelections.map((selectedValue, rowIndex) => {
+                  const selectedInOtherRows = new Set(
+                    predecessorSelections
+                      .map((value, index) => index === rowIndex ? '' : String(value || '').trim())
+                      .filter(Boolean)
+                  );
+                  const optionsForRow = availablePredecessorOptions
+                    .filter(task => task.id === selectedValue || !selectedInOtherRows.has(task.id));
+                  const hasLegacyValue = selectedValue && !optionsForRow.some(task => task.id === selectedValue);
+                  return (
+                    <div key={`pred-row-${rowIndex}`} className="flex items-center gap-2">
+                      <select
+                        value={selectedValue}
+                        onChange={(e) => {
+                          const nextValue = String(e.target.value || '').trim();
+                          const duplicateInOtherRows = predecessorSelections
+                            .some((value, index) => index !== rowIndex && String(value || '').trim() === nextValue);
+                          if (duplicateInOtherRows) {
+                            setFormError('Нельзя выбрать одного и того же предшественника несколько раз.');
+                            return;
+                          }
+                          const next = [...predecessorSelections];
+                          next[rowIndex] = nextValue;
+                          const normalized = next.map(value => String(value || '').trim());
+                          setPredecessorSelections(normalized);
+                          setFormData(prev => ({
+                            ...prev,
+                            predecessors: normalized.filter(Boolean).join(', ')
+                          }));
+                          setFormError('');
+                        }}
+                        className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                        disabled={!isTaskIdentityReady}
+                      >
+                        <option value="">Без предшественника</option>
+                        {hasLegacyValue && (
+                          <option value={selectedValue}>
+                            {selectedValue} (недоступно)
+                          </option>
+                        )}
+                        {optionsForRow.map(task => (
+                          <option key={`pred-opt-${rowIndex}-${task.id}`} value={task.id}>
+                            {task.id} - {task.name}
+                          </option>
+                        ))}
+                      </select>
+                      {predecessorSelections.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                        onClick={() => {
+                          const next = predecessorSelections.filter((_, i) => i !== rowIndex);
+                          const normalized = (next.length > 0 ? next : ['']).map(value => String(value || '').trim());
+                          setPredecessorSelections(normalized);
+                          setFormData(prev => ({
+                            ...prev,
+                            predecessors: normalized.filter(Boolean).join(', ')
+                          }));
+                          setFormError('');
+                        }}
+                        disabled={!isTaskIdentityReady}
+                      >
+                        -
+                      </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setPredecessorSelections(prev => [...prev, '']);
+                    setFormError('');
+                  }}
+                  disabled={!isTaskIdentityReady || !canAddPredecessorRow}
+                >
+                  + Добавить предшественника
+                </Button>
+                {hasEmptyPredecessorSelection && (
+                  <span className="text-xs text-muted-foreground">
+                    Сначала выберите значение в текущем поле.
+                  </span>
+                )}
+                {!hasEmptyPredecessorSelection && selectedPredecessors.length >= MAX_PREDECESSORS && (
+                  <span className="text-xs text-muted-foreground">
+                    Достигнут лимит: не более {MAX_PREDECESSORS} предшественников.
+                  </span>
+                )}
+              </div>
+              {editingTaskIndex >= 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Для редактирования доступны только задачи, расположенные выше в списке.
+                </p>
+              )}
+              {!isTaskIdentityReady && (
+                <p className="text-xs text-muted-foreground">
+                  Сначала выберите задачу из подсказок или введите вручную ID и название.
+                </p>
+              )}
             </div>
 
             <div className="flex gap-2">
-              <Button type="submit" className="flex-1">
+              <Button type="submit" className="flex-1" disabled={!isTaskIdentityReady}>
                 {editingTask ? 'Сохранить изменения' : 'Добавить работу'}
               </Button>
               {editingTask && (

@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Slider } from '@/components/ui/slider';
-import { 
+import {
   TrendingUp, 
   TrendingDown, 
   AlertTriangle, 
@@ -28,9 +28,9 @@ import {
   Pause,
   RotateCcw
 } from 'lucide-react';
-import { SPUCalculation } from '../utils/spuCalculations';
+import { calcLaborHours } from '../utils/time.js';
 
-const WhatIfModeling = ({ originalProject, originalResults }) => {
+const WhatIfModeling = ({ originalProject, originalResults, hoursPerDay = 8 }) => {
   const [scenarios, setScenarios] = useState(() => {
     try {
       const savedScenarios = localStorage.getItem("whatIfScenarios");
@@ -106,7 +106,12 @@ const WhatIfModeling = ({ originalProject, originalResults }) => {
       
       modifiedProject.tasks.forEach(task => {
         totalDuration += task.duration;
-        totalWorkload += task.workload || (task.duration * task.numberOfPerformers * 4);
+        const labor = Number.isFinite(+task.laborIntensity)
+          ? +task.laborIntensity
+          : (Number.isFinite(+task.workload)
+              ? +task.workload
+              : calcLaborHours(task.duration, task.numberOfPerformers, hoursPerDay));
+        totalWorkload += labor;
         criticalPath.push(task.id);
       });
       

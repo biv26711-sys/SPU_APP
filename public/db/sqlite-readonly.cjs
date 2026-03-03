@@ -1,8 +1,8 @@
-// public/db/sqlite-readonly.cjs
+const Database = require('better-sqlite3');
+
 let db;
 
 function openDB(dbPath) {
-  const Database = require('better-sqlite3');
   db = new Database(dbPath, { readonly: true });
 }
 

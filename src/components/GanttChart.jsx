@@ -22,68 +22,149 @@ import {
 import { format, addDays, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-const GanttChart = forwardRef(({ results, project }, ref) => {
+const GanttChart = forwardRef(({ results, project, resourceLimit, compactForExport = false }, ref) => {
+  const [history, setHistory] = useState([]);
   const [showCriticalPath, setShowCriticalPath] = useState(true);
   const [showTimeScale, setShowTimeScale] = useState(true);
   const [showResources, setShowResources] = useState(true);
+  const [showDummyTasks, setShowDummyTasks] = useState(true);
   const [showTimeReserves, setShowTimeReserves] = useState(true); 
   const [scale, setScale] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [scrollOffset, setScrollOffset] = useState({ x: 0, y: 0 });
+  // Локальная копия задач, которую мы сможем изменять
+const [localTasks, setLocalTasks] = useState([]);
+// Состояние перетаскивания: какую задачу тянем и откуда начали
+const [dragInfo, setDragInfo] = useState({ taskId: null, startX: 0, originalStart: 0 });
+
+// Постоянная высота графика ресурсов
+const RESOURCE_CHART_HEIGHT = 300; 
+
+// Синхронизируем локальные задачи с входящими данными при загрузке
+useEffect(() => {
+  
+  if (results?.tasks) {
+    setLocalTasks(JSON.parse(JSON.stringify(results.tasks)));
+  }
+}, [results]);
   
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
+  const isDraggingRef = useRef(false); // Будет true только когда ЛКМ зажата над задачей
   const animationFrameRef = useRef(null);
   
  useImperativeHandle(ref, () => ({
   getAsBase64: () => {
-    if (!results || !results.tasks || !results.tasks.length) {
-      console.error("Нет данных для генерации диаграммы Ганта.");
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      console.error("Диаграмма Ганта еще не отрисована.");
       return null;
     }
 
     try {
-      // Создаем новый canvas для полного рендеринга
-      const offscreenCanvas = document.createElement('canvas');
-      const ctx = offscreenCanvas.getContext('2d');
+      drawGanttChart();
+      const maxExportWidth = 2200;
+      if (canvas.width <= maxExportWidth) {
+        return canvas.toDataURL('image/png', 1.0);
+      }
 
-      // Рассчитываем реальные размеры всего графика без прокрутки
-      const fullChartWidth = LABEL_WIDTH + projectDuration * DAY_WIDTH;
-      const fullChartHeight = HEADER_HEIGHT + results.tasks.length * ROW_HEIGHT;
-      
-      const dpr = 2; // Увеличиваем разрешение для четкости
-      offscreenCanvas.width = fullChartWidth * dpr;
-      offscreenCanvas.height = fullChartHeight * dpr;
-      ctx.scale(dpr, dpr);
+      const exportScale = maxExportWidth / canvas.width;
+      const exportCanvas = document.createElement('canvas');
+      const exportCtx = exportCanvas.getContext('2d');
+      if (!exportCtx) {
+        return canvas.toDataURL('image/png', 1.0);
+      }
 
-      // Сохраняем текущие настройки, чтобы не влиять на отображение
-      const originalScale = scale;
-      const originalOffset = scrollOffset;
-      
-      // Временно сбрасываем масштаб и сдвиг для полного рендеринга
-      setScale(1);
-      setScrollOffset({ x: 0, y: 0 });
-      
-      // Рисуем на временном canvas
-      ctx.fillStyle = BACKGROUND_COLOR;
-      ctx.fillRect(0, 0, fullChartWidth, fullChartHeight);
-      if (showTimeScale) drawTimeScale(ctx, fullChartWidth);
-      drawGrid(ctx, fullChartWidth, fullChartHeight);
-      results.tasks.forEach((task, index) => {
-        drawTask(ctx, task, index, fullChartWidth);
-      });
-      drawBorders(ctx, fullChartWidth, fullChartHeight);
+      exportCanvas.width = Math.max(1, Math.round(canvas.width * exportScale));
+      exportCanvas.height = Math.max(1, Math.round(canvas.height * exportScale));
+      exportCtx.imageSmoothingEnabled = true;
+      exportCtx.imageSmoothingQuality = 'high';
+      exportCtx.fillStyle = BACKGROUND_COLOR;
+      exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+      exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
 
-      // Возвращаем оригинальные настройки масштаба и сдвига
-      setScale(originalScale);
-      setScrollOffset(originalOffset);
-
-      return offscreenCanvas.toDataURL('image/png', 1.0);
-
+      return exportCanvas.toDataURL('image/png', 1.0);
     } catch (e) {
       console.error("Ошибка при создании base64 из диаграммы Ганта:", e);
       return null;
+    }
+  },
+  getPaginatedBase64: () => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      console.error("Диаграмма Ганта еще не отрисована.");
+      return [];
+    }
+
+    try {
+      drawGanttChart();
+
+      const styleWidth = parseFloat(canvas.style.width) || canvas.clientWidth || 1;
+      const pixelRatio = canvas.width / Math.max(1, styleWidth);
+      const labelWidthPx = Math.max(1, Math.round(LABEL_WIDTH * pixelRatio));
+      const totalTimelinePx = Math.max(0, canvas.width - labelWidthPx);
+      const actualTimelineCssWidth = Math.max(1, (projectDuration + 1) * DAY_WIDTH * scale);
+      const actualTimelinePx = Math.max(
+        1,
+        Math.min(totalTimelinePx, Math.round(actualTimelineCssWidth * pixelRatio))
+      );
+      const preferredSliceCssWidth = Math.max(600, 18 * DAY_WIDTH * scale);
+      const preferredSlicePx = Math.max(1, Math.round(preferredSliceCssWidth * pixelRatio));
+      const pageCount = Math.max(1, Math.ceil(actualTimelinePx / preferredSlicePx));
+      const balancedSlicePx = Math.max(1, Math.ceil(actualTimelinePx / pageCount));
+
+      const pages = [];
+
+      for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+        const startPx = pageIndex * balancedSlicePx;
+        const sliceWidthPx = Math.min(balancedSlicePx, actualTimelinePx - startPx);
+        if (sliceWidthPx <= 0) {
+          continue;
+        }
+        const pageCanvas = document.createElement('canvas');
+        const pageCtx = pageCanvas.getContext('2d');
+        if (!pageCtx) {
+          return [canvas.toDataURL('image/png', 1.0)];
+        }
+
+        pageCanvas.width = labelWidthPx + sliceWidthPx;
+        pageCanvas.height = canvas.height;
+
+        pageCtx.fillStyle = BACKGROUND_COLOR;
+        pageCtx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+
+        pageCtx.drawImage(
+          canvas,
+          0,
+          0,
+          labelWidthPx,
+          canvas.height,
+          0,
+          0,
+          labelWidthPx,
+          canvas.height
+        );
+
+        pageCtx.drawImage(
+          canvas,
+          labelWidthPx + startPx,
+          0,
+          sliceWidthPx,
+          canvas.height,
+          labelWidthPx,
+          0,
+          sliceWidthPx,
+          canvas.height
+        );
+
+        pages.push(pageCanvas.toDataURL('image/png', 1.0));
+      }
+
+      return pages;
+    } catch (e) {
+      console.error("Ошибка при создании страниц диаграммы Ганта:", e);
+      return [];
     }
   },
 }));
@@ -106,44 +187,231 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
   const BACKGROUND_COLOR = '#ffffff';
   const HEADER_COLOR = '#f8fafc';
 
+  const formatChartNumber = (value) => {
+    const number = Number(value);
+    if (!Number.isFinite(number) || Math.abs(number) < 0.005) {
+      return '0.00';
+    }
+    return number.toFixed(2);
+  };
+
+  useEffect(() => {
+    if (!compactForExport) return;
+
+    const usableWidth = 1500 - LABEL_WIDTH;
+    const timelineWidth = Math.max(1, projectDuration * DAY_WIDTH);
+    const fittedScale = Math.min(1, Math.max(0.12, usableWidth / timelineWidth));
+
+    setScale(fittedScale);
+    setScrollOffset({ x: 0, y: 0 });
+  }, [compactForExport, projectDuration]);
+
   
   const handleWheel = useCallback((e) => {
-    if (e.ctrlKey) {
-      e.preventDefault();
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      setScale(prev => Math.max(0.2, Math.min(prev * delta, 5)));
-    }
-  }, []);
+  if (e.ctrlKey) {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setScale(prev => Math.max(0.2, Math.min(prev * delta, 5)));
+    return;
+  }
 
+  e.preventDefault();
+
+  setScrollOffset(prev => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return prev;
+
+    // --- РАЗМЕРЫ ЭКРАНА (ВИДИМАЯ ОБЛАСТЬ) ---
+    const viewWidth = container.offsetWidth;
+    const viewHeight = container.offsetHeight;
+
+    // --- ПОЛНЫЕ РАЗМЕРЫ КОНТЕНТА ---
+    // Ширина: Названия (320px) + Дни проекта * ширина дня * масштаб
+    const fullContentWidth = LABEL_WIDTH + (projectDuration * DAY_WIDTH * scale);
+    
+    // Высота: Шапка (80px) + Задачи * 40px + График ресурсов (если есть)
+    const tasksHeight = localTasks.length * ROW_HEIGHT;
+    const resourcesHeight = showResources ? RESOURCE_CHART_HEIGHT : 0;
+    const fullContentHeight = HEADER_HEIGHT + tasksHeight + resourcesHeight;
+
+    // --- ЛИМИТЫ (Отрицательные значения) ---
+    // Мы не можем скроллить влево/вниз больше чем разница между контентом и экраном
+    // Если контент меньше экрана, лимит должен быть 0
+    const minX = Math.min(0, viewWidth - fullContentWidth - 100); // 100px запас справа
+    const minY = Math.min(0, viewHeight - fullContentHeight - 50);  // 50px запас снизу
+
+    // --- СКОРОСТЬ И НАПРАВЛЕНИЕ ---
+    const scrollSpeed = 0.8; 
+    const dx = e.shiftKey ? e.deltaY * scrollSpeed : 0;
+    const dy = e.shiftKey ? 0 : e.deltaY * scrollSpeed;
+
+    // --- РЕЗУЛЬТАТ С ЗАЖИМОМ (CLAMP) ---
+    return {
+      x: Math.min(0, Math.max(prev.x - dx, minX)),
+      y: Math.min(0, Math.max(prev.y - dy, minY))
+    };
+  });
+}, [scale, projectDuration, localTasks.length, showResources, LABEL_WIDTH, HEADER_HEIGHT, ROW_HEIGHT, DAY_WIDTH]);
 
   const handleMouseDown = useCallback((e) => {
-    if (e.button === 0) { 
-      setIsPanning(true);
-      setPanStart({ x: e.clientX, y: e.clientY });
-      e.preventDefault();
-    }
-  }, []);
+  const rect = canvasRef.current.getBoundingClientRect();
+  const mouseX = (e.clientX - rect.left - scrollOffset.x);
+  const mouseY = (e.clientY - rect.top - scrollOffset.y);
+
+  const clickedTaskIndex = localTasks.findIndex((task, index) => {
+    const y = HEADER_HEIGHT + index * ROW_HEIGHT + TASK_MARGIN;
+    const xStart = LABEL_WIDTH + (task.earlyStart || 0) * DAY_WIDTH * scale;
+    const xEnd = xStart + task.duration * DAY_WIDTH * scale;
+    return mouseY >= y && mouseY <= y + TASK_HEIGHT && mouseX >= xStart && mouseX <= xEnd;
+  });
+
+  if (clickedTaskIndex !== -1) {
+    // ПЕРЕД тем как начать двигать, сохраняем текущее (еще старое) состояние в историю
+    const currentState = JSON.stringify(localTasks);
+    setHistory(prev => [...prev, currentState]);
+
+    const task = localTasks[clickedTaskIndex];
+    isDraggingRef.current = true;
+    setDragInfo({
+      taskId: task.id,
+      startX: e.clientX,
+      originalStart: task.earlyStart
+    });
+  } else {
+    setIsPanning(true);
+    setPanStart({ x: e.clientX, y: e.clientY });
+  }
+}, [localTasks, scrollOffset, scale]);
+
+// Вспомогательная функция: кто должен закончиться до начала текущей задачи
+const getTaskPredecessors = (currentTask, allTasks) => {
+  const [startNode] = currentTask.id.split('-').map(Number);
+  return allTasks.filter(t => {
+    const [_, endNode] = t.id.split('-').map(Number);
+    return endNode === startNode;
+  });
+};
+
+// Вспомогательная функция: кто должен начаться после конца текущей задачи
+const getTaskSuccessors = (currentTask, allTasks) => {
+  const [_, endNode] = currentTask.id.split('-').map(Number);
+  return allTasks.filter(t => {
+    const [childStartNode] = t.id.split('-').map(Number);
+    return childStartNode === endNode;
+  });
+};
+
+// Основная функция каскадного обновления
+const updateCascade = (allTasks, movedTaskId, direction, originalResults) => {
+  const task = allTasks.find(t => t.id === movedTaskId);
+  if (!task) return;
+
+  if (direction === 'forward') {
+    // ТОЛКАЕМ ВПРАВО (Потомки)
+    const taskEnd = task.earlyStart + task.duration;
+    const successors = getTaskSuccessors(task, allTasks);
+
+    successors.forEach(child => {
+      if (child.earlyStart < taskEnd) {
+        child.earlyStart = taskEnd;
+        updateCascade(allTasks, child.id, 'forward', originalResults);
+      }
+    });
+  } else if (direction === 'backward') {
+    // ТЯНЕМ ВЛЕВО (Предки)
+    const taskStart = task.earlyStart;
+    const predecessors = getTaskPredecessors(task, allTasks);
+
+    predecessors.forEach(pred => {
+      // Идеальный финиш для предка - это начало текущей задачи
+      const targetFinish = taskStart;
+      const predOriginal = originalResults.find(t => t.id === pred.id);
+      
+      // Предка можно двигать назад только до его "законного" раннего старта
+      // Чтобы не сдвинуть критический путь или начало проекта
+      const minStart = predOriginal.earlyStart;
+      
+      if (pred.earlyStart + pred.duration > targetFinish) {
+        let newStart = targetFinish - pred.duration;
+        
+        // Ограничиваем, чтобы не уйти левее дозволенного
+        if (newStart < minStart) newStart = minStart;
+        
+        if (pred.earlyStart !== newStart) {
+          pred.earlyStart = newStart;
+          // Рекурсивно тянем предков этого предка
+          updateCascade(allTasks, pred.id, 'backward', originalResults);
+        }
+      }
+    });
+  }
+};
 
   const handleMouseMove = useCallback((e) => {
+  if (!isDraggingRef.current || !dragInfo.taskId) {
     if (isPanning) {
       const deltaX = e.clientX - panStart.x;
       const deltaY = e.clientY - panStart.y;
-      
-      setScrollOffset(prev => ({
-        x: prev.x + deltaX,
-        y: prev.y + deltaY
-      }));
-      
+      setScrollOffset(prev => ({ x: prev.x + deltaX, y: prev.y + deltaY }));
       setPanStart({ x: e.clientX, y: e.clientY });
     }
-  }, [isPanning, panStart]);
+    return;
+  }
+
+  const deltaX = e.clientX - dragInfo.startX;
+  const daysDelta = Math.round((deltaX / (DAY_WIDTH * scale)) * 10) / 10;
+  
+  setLocalTasks(prev => {
+    const newTasks = JSON.parse(JSON.stringify(prev));
+    const task = newTasks.find(t => t.id === dragInfo.taskId);
+    const originalTask = results.tasks.find(t => t.id === dragInfo.taskId);
+    
+    let newStart = dragInfo.originalStart + daysDelta;
+
+    // ОГРАНИЧЕНИЕ: Самое раннее — это оригинальный Early Start задачи
+    // (потому что предки не могут уйти левее своих оригинальных позиций)
+    if (newStart < originalTask.earlyStart) {
+      newStart = originalTask.earlyStart;
+    }
+
+    // ОГРАНИЧЕНИЕ: Самое позднее — это Early Start + Резерв (Late Start)
+    const maxAllowedStart = originalTask.earlyStart + (originalTask.totalFloat || 0);
+    if (newStart > maxAllowedStart) {
+      newStart = maxAllowedStart;
+    }
+
+    if (task.earlyStart === newStart) return prev;
+
+    const direction = newStart > task.earlyStart ? 'forward' : 'backward';
+    task.earlyStart = newStart;
+
+    // Запускаем каскад в зависимости от направления движения
+    updateCascade(newTasks, task.id, direction, results.tasks);
+
+    
+    newTasks.forEach(t => {
+      const orig = results.tasks.find(ot => ot.id === t.id);
+      const currentFinish = t.earlyStart + t.duration;
+      t.totalFloat = Math.max(0, Math.round((orig.lateFinish - currentFinish) * 10) / 10);
+    });
+
+    return newTasks;
+  });
+}, [dragInfo, isPanning, panStart, scale, results.tasks]);
 
   const handleMouseUp = useCallback(() => {
-    setIsPanning(false);
-  }, []);
-
+  // Если мы закончили тащить, но ничего не изменилось (просто кликнули)
+  // можно было бы удалить последний шаг из истории, но для простоты 
+  // оставим так — это не критично.
+  
+  isDraggingRef.current = false;
+  setDragInfo({ taskId: null, startX: 0, originalStart: 0 });
+  setIsPanning(false);
+}, []); // Зависимости теперь не нужны
   useEffect(() => {
     const canvas = canvasRef.current;
+    
     if (canvas) {
       canvas.addEventListener('wheel', handleWheel, { passive: false });
       canvas.addEventListener('mousedown', handleMouseDown);
@@ -172,9 +440,149 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [tasks, showCriticalPath, showTimeScale, showResources, showTimeReserves, scale, scrollOffset]);
+  }, [localTasks, showCriticalPath, showTimeScale, showResources, showTimeReserves,showDummyTasks, scale, scrollOffset]);
+
+const drawResourceChart = (ctx, chartWidth, totalHeight) => {
+  const limit = resourceLimit || 10;
+  
+  // Увеличиваем отступы, чтобы график не жался к краям
+  const TOP_PADDING = 60;    // Место для заголовка "Ресурсная гистограмма"
+  const BOTTOM_PADDING = 50; // Место для подписей дней и оси X
+  const LEFT_AXIS_SPACE = 60; // Место для вертикальной подписи оси Y
+  
+  const startY = totalHeight - RESOURCE_CHART_HEIGHT + TOP_PADDING;
+  const startX = LABEL_WIDTH;
+  const dayWidth = DAY_WIDTH * scale;
+  const chartAreaHeight = RESOURCE_CHART_HEIGHT - TOP_PADDING - BOTTOM_PADDING;
+
+  // 1. Логика расчета (без изменений)
+  const resourceUsage = new Array(Math.ceil(projectDuration) + 1).fill(0);
+  localTasks.forEach(task => {
+    const taskStart = task.earlyStart;
+    const taskEnd = task.earlyStart + task.duration;
+    const performers = task.numberOfPerformers || 0;
+    for (let i = 0; i < resourceUsage.length; i++) {
+      const overlapStart = Math.max(taskStart, i);
+      const overlapEnd = Math.min(taskEnd, i + 1);
+      if (overlapEnd - overlapStart > 0.001) {
+        resourceUsage[i] += performers;
+      }
+    }
+  });
+
+  const maxPeople = Math.max(...resourceUsage, limit);
+
+  // --- 2. ЗАГОЛОВОК-РАЗДЕЛИТЕЛЬ ---
+  // Рисуем заголовок посередине, перекрывая пунктирные линии сетки
+  const titleText = "Ресурсная гистограмма";
+  ctx.font = 'bold 16px sans-serif';
+  const titleWidth = ctx.measureText(titleText).width;
+  const centerX = startX + (chartWidth - startX) / 2;
+  const titleY = startY - 30;
+
+  // "Прерываем" линию: рисуем белый прямоугольник под текстом
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(centerX - (titleWidth / 2) - 10, titleY - 15, titleWidth + 20, 25);
+  
+  ctx.fillStyle = '#1e293b';
+  ctx.textAlign = 'center';
+  ctx.fillText(titleText, centerX, titleY);
+
+  // --- 3. ПОДПИСИ ОСЕЙ ---
+  ctx.save();
+  // Ось Y (вертикально слева)
+  ctx.translate(startX - 45, startY + chartAreaHeight / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillStyle = '#64748b';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Кол-во занятых исполнителей, чел.', 0, 0);
+  ctx.restore();
+
+  // Ось X (внизу справа)
+  ctx.fillStyle = '#64748b';
+  ctx.font = 'italic 12px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText('Время, дни', chartWidth - 10, startY + chartAreaHeight + 40);
+
+  // --- 4. ОТРИСОВКА СТОЛБИКОВ ---
+  resourceUsage.forEach((count, day) => {
+    const displayCount = Math.round(count * 10) / 10;
+    const barHeight = (displayCount / maxPeople) * chartAreaHeight;
+    const x = startX + day * dayWidth;
+    const y = startY + chartAreaHeight - barHeight;
+
+    // Вертикальная сетка дней (пунктир или тонкая линия)
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x, startY);
+    ctx.lineTo(x, startY + chartAreaHeight);
+    ctx.stroke();
+
+    if (displayCount > 0) {
+      // Градиент столбика (как в старой версии)
+      const gradient = ctx.createLinearGradient(x, y, x, startY + chartAreaHeight);
+      if (displayCount > limit) {
+        gradient.addColorStop(0, '#f87171'); // Красный верх
+        gradient.addColorStop(1, '#dc2626'); // Темно-красный низ
+      } else {
+        gradient.addColorStop(0, '#60a5fa'); // Голубой верх
+        gradient.addColorStop(1, '#2563eb'); // Синий низ
+      }
+   
+      ctx.fillStyle = gradient;
+      ctx.fillRect(x + 2, y, dayWidth - 4, barHeight);
+
+      // Число людей сверху столбика
+      ctx.fillStyle = '#1e293b';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(displayCount, x + dayWidth / 2, y - 5);
+    }
+
+    // Нумерация КАЖДОГО дня (жирным каждый 5-й)
+    if (dayWidth > 15) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = day % 5 === 0 ? '#1f2937' : '#6b7280';
+      ctx.font = day % 5 === 0 ? 'bold 12px sans-serif' : '11px sans-serif';
+      ctx.fillText(day, x, startY + chartAreaHeight + 25);
+    }
+  });
+
+  // --- 5. ЛИНИИ ОСЕЙ И ЛИМИТ ---
+  ctx.strokeStyle = '#94a3b8';
+  ctx.lineWidth = 2;
+  
+  // Основная горизонтальная ось
+  ctx.beginPath();
+  ctx.moveTo(startX, startY + chartAreaHeight);
+  ctx.lineTo(chartWidth, startY + chartAreaHeight);
+  ctx.stroke();
+
+  // Линия лимита (если она выше 0)
+  const limitY = startY + chartAreaHeight - (limit / maxPeople) * chartAreaHeight;
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.strokeStyle = '#ef4444';
+  ctx.beginPath();
+  ctx.moveTo(startX, limitY);
+  ctx.lineTo(chartWidth, limitY);
+  ctx.stroke();
+  ctx.restore();
+};
+  
+
+
 
   const drawGanttChart = () => {
+    const visibleTasks = localTasks.filter(task => {
+      if (!showDummyTasks) {
+      const isDummy = task.duration === 0 || task.name.toLowerCase().includes('фиктивная');
+      return !isDummy;
+    }
+    return true;
+    });
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container || tasks.length === 0) return;
@@ -185,7 +593,7 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
     const containerWidth = container.offsetWidth;
     const containerHeight = container.offsetHeight;
     const chartWidth = Math.max(containerWidth, LABEL_WIDTH + projectDuration * DAY_WIDTH * scale);
-    const chartHeight = Math.max(containerHeight, HEADER_HEIGHT + tasks.length * ROW_HEIGHT);
+    const chartHeight = showResources ? Math.max(containerHeight, HEADER_HEIGHT + visibleTasks.length * ROW_HEIGHT + RESOURCE_CHART_HEIGHT) : Math.max(containerHeight, HEADER_HEIGHT + visibleTasks.length * ROW_HEIGHT);
 
    
     const dpr = window.devicePixelRatio || 1;
@@ -206,21 +614,29 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
     ctx.fillStyle = BACKGROUND_COLOR;
     ctx.fillRect(-scrollOffset.x, -scrollOffset.y, chartWidth, chartHeight);
 
-   
+    
     if (showTimeScale) {
       drawTimeScale(ctx, chartWidth);
     }
 
   
-    drawGrid(ctx, chartWidth, chartHeight);
-
-   
-    tasks.forEach((task, index) => {
+    
+    
+    
+    visibleTasks.forEach((task, index) => {
       drawTask(ctx, task, index, chartWidth);
     });
-
+    
    
+    
+    
+    drawGrid(ctx, chartWidth, chartHeight);
+
     drawBorders(ctx, chartWidth, chartHeight);
+
+    if(showResources){
+      drawResourceChart(ctx, chartWidth, chartHeight);
+    }
 
     ctx.restore();
   };
@@ -228,7 +644,7 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
   const drawTimeScale = (ctx, chartWidth) => {
     const timeScaleY = 0;
     const timeScaleHeight = HEADER_HEIGHT;
-
+    console.log("Весь объект results:", results);
     
     ctx.fillStyle = HEADER_COLOR;
     ctx.fillRect(-scrollOffset.x, timeScaleY, chartWidth + Math.abs(scrollOffset.x), timeScaleHeight);
@@ -258,7 +674,7 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
     const dayWidth = DAY_WIDTH * scale;
 
   
-    for (let day = 0; day <= projectDuration; day++) {
+    for (let day = 0; day <= projectDuration + 1; day++) {
       const x = startX + day * dayWidth;
       
       if (x > chartWidth + Math.abs(scrollOffset.x)) break;
@@ -390,7 +806,7 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
       }
 
       
-      if (showTimeReserves && task.totalFloat !== undefined && task.totalFloat > 0) {
+      if (showTimeReserves && task.totalFloat !== undefined && task.totalFloat > 0.005) {
         const floatStartX = startX + taskWidth;
         const floatWidth = task.totalFloat * DAY_WIDTH * scale;
 
@@ -405,7 +821,7 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
             ctx.fillStyle = '#1e40af';
             ctx.font = '10px sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText(`Резерв: ${task.totalFloat}д`, floatStartX + floatWidth / 2, taskY + TASK_HEIGHT / 2);
+            ctx.fillText(`Резерв: ${formatChartNumber(task.totalFloat)}д`, floatStartX + floatWidth / 2, taskY + TASK_HEIGHT / 2);
           }
         }
       }
@@ -421,26 +837,34 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
   };
 
   const drawGrid = (ctx, chartWidth, chartHeight) => {
-    ctx.strokeStyle = GRID_COLOR;
-    ctx.lineWidth = 1;
-
-   
-    const startX = LABEL_WIDTH;
-    const dayWidth = DAY_WIDTH * scale;
+  const startX = LABEL_WIDTH;
+  const dayWidth = DAY_WIDTH * scale;
+  
+  for (let day = 0; day <= projectDuration + 1; day++) {
+    const x = startX + day * dayWidth;
+    if (x > chartWidth + Math.abs(scrollOffset.x)) break;
+    if (x < -Math.abs(scrollOffset.x)) continue;
     
-    for (let day = 0; day <= projectDuration; day++) {
-      const x = startX + day * dayWidth;
-      if (x > chartWidth + Math.abs(scrollOffset.x)) break;
-      if (x < -Math.abs(scrollOffset.x)) continue;
-      
-      ctx.strokeStyle = day % 5 === 0 ? '#cbd5e1' : GRID_COLOR;
-      ctx.lineWidth = day % 5 === 0 ? 1 : 0.5;
-      ctx.beginPath();
-      ctx.moveTo(x, HEADER_HEIGHT);
-      ctx.lineTo(x, chartHeight);
-      ctx.stroke();
-    }
-  };
+    // Определяем стиль линии (каждые 5 дней линия чуть темнее)
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = day % 5 === 0 ? 1 : 0.5;
+
+    ctx.beginPath();
+    
+    // --- НОВАЯ ЛОГИКА ПУНКТИРА ---
+    // Устанавливаем пунктир: 5px штрих, 5px пустота
+    ctx.setLineDash([5, 5]); 
+    
+    ctx.moveTo(x, HEADER_HEIGHT);
+    ctx.lineTo(x, chartHeight);
+    ctx.stroke();
+    
+    // СБРОС: Важно сбросить пунктир в [] сразу после stroke, 
+    // чтобы прямоугольники работ не стали пунктирными!
+    ctx.setLineDash([]); 
+    // -----------------------------
+  }
+};
 
   const drawBorders = (ctx, chartWidth, chartHeight) => {
     
@@ -482,7 +906,7 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
 
   const exportToSVG = () => {
     const containerWidth = containerRef.current?.offsetWidth || 800;
-    const chartWidth = Math.max(containerWidth, LABEL_WIDTH + projectDuration * DAY_WIDTH * scale);
+    const chartWidth = Math.max(containerWidth, LABEL_WIDTH + (projectDuration + 1) * DAY_WIDTH * scale);
     const chartHeight = HEADER_HEIGHT + tasks.length * ROW_HEIGHT;
 
     let svg = `<svg width="${chartWidth}" height="${chartHeight}" xmlns="http://www.w3.org/2000/svg">`;
@@ -641,8 +1065,61 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
     setScrollOffset({ x: 0, y: 0 });
   };
 
+  // Функция "Шаг назад"
+const handleUndo = useCallback(() => {
+  if (history.length === 0) return;
+
+  // Берем последний "снимок" (это состояние ДО последнего движения)
+  const previousStateRaw = history[history.length - 1];
+  
+  // Применяем его
+  setLocalTasks(JSON.parse(previousStateRaw));
+  
+  // Удаляем этот снимок из истории, так как мы его уже использовали
+  setHistory(prev => prev.slice(0, -1));
+}, [history]);
+useEffect(() => {
+  const handleKeyDown = (e) => {
+    // Проверяем Ctrl + Z или Cmd + Z (для Mac)
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      // Предотвращаем стандартное действие браузера (если оно есть)
+      e.preventDefault();
+      
+      // Вызываем отмену, только если есть что отменять
+      if (history.length > 0) {
+        handleUndo();
+      }
+    }
+  };
+
+  // Вешаем слушатель на весь документ
+  document.addEventListener('keydown', handleKeyDown);
+
+  // Обязательно убираем слушатель при размонтировании компонента, 
+  // чтобы не было утечек памяти и лишних срабатываний
+  return () => {
+    document.removeEventListener('keydown', handleKeyDown);
+  };
+}, [handleUndo, history.length]); // Перезапускаем, если изменилась функция или длина истории
+// Функция "Сброс всех изменений"
+const handleReset = useCallback(() => {
+  if (window.confirm("Вы уверены, что хотите сбросить все ручные изменения к исходному расчету?")) {
+    // Возвращаем данные из исходного пропса results
+    setLocalTasks(JSON.parse(JSON.stringify(results.tasks)));
+    setHistory([]);
+  }
+}, [results.tasks]);
+
   return (
     <div className="space-y-4">
+      <div className="flex items-center gap-4 p-3 bg-slate-50 border-b border-slate-200">
+      
+      
+      {/* Здесь можно оставить ваши старые кнопки масштаба, если они были */}
+      <div className="text-xs text-slate-500 ml-auto">
+        Перетаскивайте синие полоски в пределах резерва
+      </div>
+    </div>
       <div className="flex justify-between items-center">
         <CardTitle>Диаграмма Ганта</CardTitle>
         <div className="flex items-center space-x-2">
@@ -655,6 +1132,11 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
           <Button onClick={zoomOut} size="sm" variant="outline" className="hover:bg-gray-50">
             <ZoomOut className="h-4 w-4" />
           </Button>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Move className="h-4 w-4" />
+              <span>Масштаб: {(scale * 100).toFixed(0)}%</span>
+              {isPanning && <Badge variant="secondary">Перемещение</Badge>}
+          </div>
           <div className="border-l border-gray-200 mx-2"></div>
           <Button onClick={exportToPNG} size="sm" variant="outline" className="hover:bg-blue-50">
             <Download className="h-4 w-4 mr-2" />
@@ -675,52 +1157,89 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
         <CardContent className="p-4">
           <div className="flex flex-wrap gap-4 items-center">
             <div className="flex items-center gap-3">
-              <Button
-                size="sm"
-                variant={showCriticalPath ? "default" : "outline"}
-                onClick={() => setShowCriticalPath(!showCriticalPath)}
-                className="transition-all duration-200"
-              >
-                {showCriticalPath ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                <span className="ml-2">Критический путь</span>
-              </Button>
-              
-              <Button
-                size="sm"
-                variant={showTimeScale ? "default" : "outline"}
-                onClick={() => setShowTimeScale(!showTimeScale)}
-                className="transition-all duration-200"
-              >
-                {showTimeScale ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                <span className="ml-2">Временная шкала</span>
-              </Button>
-              
-              <Button
-                size="sm"
-                variant={showResources ? "default" : "outline"}
-                onClick={() => setShowResources(!showResources)}
-                className="transition-all duration-200"
-              >
-                {showResources ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                <span className="ml-2">Ресурсы</span>
-              </Button>
+    <Button
+      size="sm"
+      variant={showCriticalPath ? "default" : "outline"}
+      onClick={() => setShowCriticalPath(!showCriticalPath)}
+      className="transition-all duration-200"
+    >
+      {showCriticalPath ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
+      Критический путь
+    </Button>
+    
+    <Button
+      size="sm"
+      variant={showTimeScale ? "default" : "outline"}
+      onClick={() => setShowTimeScale(!showTimeScale)}
+      className="transition-all duration-200"
+    >
+      {showTimeScale ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
+      Временная шкала
+    </Button>
+    
+    <Button
+      size="sm"
+      variant={showResources ? "default" : "outline"}
+      onClick={() => setShowResources(!showResources)}
+      className="transition-all duration-200"
+    >
+      {showResources ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
+      Ресурсы
+    </Button>
+    <Button
+      size="sm"
+      variant={showDummyTasks ? "default" : "outline"}
+      onClick={() => setShowDummyTasks(!showDummyTasks)}
+      className="transition-all duration-200"
+    >
+      {showDummyTasks ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
+      Фиктивные работы
+    </Button>
 
-              <Button 
-                size="sm"
-                variant={showTimeReserves ? "default" : "outline"}
-                onClick={() => setShowTimeReserves(!showTimeReserves)}
-                className="transition-all duration-200"
-              >
-                {showTimeReserves ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                <span className="ml-2">Резервы времени</span>
-              </Button>
-            </div>
+    <Button 
+      size="sm"
+      variant={showTimeReserves ? "default" : "outline"}
+      onClick={() => setShowTimeReserves(!showTimeReserves)}
+      className="transition-all duration-200"
+    >
+      {showTimeReserves ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
+      Резервы времени
+    </Button>
+  </div>
+
+  {/* Этот элемент создаст пустое пространство и сдвинет следующие кнопки вправо */}
+  <div className="flex-grow" />
+
+  {/* Правая группа кнопок управления историей */}
+  <div className="flex items-center gap-3">
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={handleUndo}
+      disabled={history.length === 0}
+      className="transition-all duration-200"
+    >
+      <RotateCcw className="h-4 w-4 mr-2" />
+      Шаг назад
+      {history.length > 0 && (
+        <Badge variant="secondary" className="ml-2 px-1 py-0 h-4 text-[10px]">
+          {history.length}
+        </Badge>
+      )}
+    </Button>
+
+    <Button
+      size="sm"
+      variant="destructive"
+      onClick={handleReset}
+      className="transition-all duration-200"
+    >
+      <RotateCcw className="h-4 w-4 mr-2" /> {/* Или иконка Trash2 из lucide */}
+      Сбросить изменения
+    </Button>
+  </div>
             
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Move className="h-4 w-4" />
-              <span>Масштаб: {(scale * 100).toFixed(0)}%</span>
-              {isPanning && <Badge variant="secondary">Перемещение</Badge>}
-            </div>
+            
           </div>
         </CardContent>
       </Card>
@@ -778,10 +1297,15 @@ const GanttChart = forwardRef(({ results, project }, ref) => {
                 <div className="w-4 h-3 bg-red-500 rounded"></div>
                 <span>Критический путь</span>
               </div>
+              <div className="flex items-center gap-2">
+                <div className="w-0.5 h-3 bg-blue-500"></div>
+                <span>Фиктивные работы</span>
+              </div>
               <div className="flex items-center gap-2"> 
                 <div className="w-4 h-3 bg-blue-300 rounded"></div>
                 <span>Резервы времени</span>
               </div>
+
             </div>
           </div>
         </CardContent>

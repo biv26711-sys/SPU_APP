@@ -1,9 +1,9 @@
-
 import { SPUCalculation } from './spuCalculations.js';
+import { calcLaborHours } from './time.js';
 
-export const validateNetwork = (tasks) => {
+export const validateNetwork = (tasks, options = {}) => {
   try {
-    return SPUCalculation.validateNetwork(tasks);
+    return SPUCalculation.validateNetwork(tasks, options);
   } catch (error) {
     return {
       isValid: false,
@@ -12,9 +12,9 @@ export const validateNetwork = (tasks) => {
   }
 };
 
-export const calculateNetworkParameters = (tasks) => {
+export const calculateNetworkParameters = (tasks, options = {}) => {
   try {
-    return SPUCalculation.calculateNetworkParameters(tasks);
+    return SPUCalculation.calculateNetworkParameters(tasks, options);
   } catch (error) {
     return {
       isValid: false,
@@ -93,13 +93,26 @@ export const createProject = (id, name, tasks = []) => {
   };
 };
 
-export const createTask = (id, name, duration, laborIntensity, numberOfPerformers, predecessors = []) => {
+export const createTask = (
+  id,
+  name,
+  duration,
+  laborIntensity,
+  numberOfPerformers,
+  predecessors = [],
+  hoursPerDay = 8
+) => {
+  const parsedDuration = parseFloat(duration) || 0;
+  const parsedPerformers = Math.max(1, parseInt(numberOfPerformers, 10) || 1);
+  const parsedLabor = Number(laborIntensity);
   return {
     id: id || '',
     name: name || '',
-    duration: parseFloat(duration) || 0,
-    laborIntensity: parseFloat(laborIntensity) || parseFloat(duration) * 8 || 0,
-    numberOfPerformers: parseInt(numberOfPerformers) || 1,
+    duration: parsedDuration,
+    laborIntensity: Number.isFinite(parsedLabor)
+      ? parsedLabor
+      : calcLaborHours(parsedDuration, parsedPerformers, hoursPerDay),
+    numberOfPerformers: parsedPerformers,
     predecessors: Array.isArray(predecessors) ? predecessors : [],
     createdAt: new Date().toISOString()
   };
@@ -162,7 +175,7 @@ export const calculateTotalPerformers = (tasks) => {
   return tasks.reduce((total, task) => total + (task.numberOfPerformers || 0), 0);
 };
 
-export const calculateAverageLoad = (tasks, projectDuration) => {
+export const calculateAverageLoad = (tasks, projectDuration, hoursPerDay = 8) => {
   if (!projectDuration || projectDuration === 0) {
     return 0;
   }
@@ -174,8 +187,7 @@ export const calculateAverageLoad = (tasks, projectDuration) => {
     return 0;
   }
   
-  return totalLaborIntensity / (totalPerformers * projectDuration * 8) * 100;
+  return totalLaborIntensity / (totalPerformers * projectDuration * hoursPerDay) * 100;
 };
 
 export { SPUCalculation };
-

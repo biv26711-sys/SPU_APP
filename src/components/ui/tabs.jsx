@@ -17,12 +17,13 @@ function Tabs({
   );
 }
 
-function TabsList({
-  className,
-  ...props
-}) {
+const TabsList = React.forwardRef(function TabsList(
+  { className, ...props },
+  ref
+) {
   return (
     <TabsPrimitive.List
+      ref={ref}
       data-slot="tabs-list"
       className={cn(
         "bg-muted text-muted-foreground inline-flex h-9 w-fit items-center justify-center rounded-lg p-[3px]",
@@ -30,7 +31,9 @@ function TabsList({
       )}
       {...props} />
   );
-}
+});
+
+TabsList.displayName = "TabsList"
 
 function TabsTrigger({
   className,

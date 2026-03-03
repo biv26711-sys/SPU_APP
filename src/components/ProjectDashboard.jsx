@@ -35,8 +35,15 @@ import {
   Download,
   FileText
 } from 'lucide-react';
+import { calcLaborHours } from '../utils/time.js';
 
-const ProjectDashboard = ({ results, project }) => {
+function getTaskWorkloadHours(task, hoursPerDay) {
+  const labor = Number(task.laborIntensity);
+  if (Number.isFinite(labor)) return labor;
+  return calcLaborHours(task.duration, task.numberOfPerformers, hoursPerDay);
+}
+
+const ProjectDashboard = ({ results, project, hoursPerDay = 8 }) => {
   const [selectedMetric, setSelectedMetric] = useState('duration');
 
   const dashboardData = useMemo(() => {
@@ -62,7 +69,7 @@ const ProjectDashboard = ({ results, project }) => {
       critical: criticalTasks.reduce((sum, task) => sum + task.numberOfPerformers, 0),
       average: tasks.reduce((sum, task) => sum + task.numberOfPerformers, 0) / tasks.length,
       maxPerTask: Math.max(...tasks.map(task => task.numberOfPerformers)),
-      totalWorkload: tasks.reduce((sum, task) => sum + (task.laborIntensity || task.duration), 0)
+      totalWorkload: tasks.reduce((sum, task) => sum + getTaskWorkloadHours(task, hoursPerDay), 0)
     };
 
     const taskDistribution = [
@@ -156,7 +163,7 @@ const ProjectDashboard = ({ results, project }) => {
       },
       risks
     };
-  }, [results]);
+  }, [results, hoursPerDay]);
 
   if (!dashboardData) {
     return (
@@ -495,4 +502,3 @@ const ProjectDashboard = ({ results, project }) => {
 };
 
 export default ProjectDashboard;
-

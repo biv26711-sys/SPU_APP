@@ -1,4 +1,4 @@
-import { Document, Packer, Paragraph, Table, TableCell, TableRow, WidthType, AlignmentType, TextRun, HeadingLevel, ImageRun, PageOrientation } from 'docx';
+import { Document, Packer, Paragraph, Table, TableCell, TableRow, WidthType, AlignmentType, TextRun, HeadingLevel, ImageRun, PageOrientation, SectionType } from 'docx';
 import { saveAs } from 'file-saver';
 
 const arePlansEqual = (plan1, plan2) => {
@@ -8,15 +8,69 @@ const arePlansEqual = (plan1, plan2) => {
     return JSON.stringify(plan1Data) === JSON.stringify(plan2Data);
 };
 
-const base64ToBuffer = (base64) => {
-  const base64String = base64.split(',')[1] || base64;
+const base64ToImageData = (base64) => {
+  const match = /^data:image\/([a-zA-Z0-9+]+);base64,/.exec(base64 || '');
+  const base64String = match ? base64.slice(match[0].length) : base64;
   const binaryStr = atob(base64String);
   const len = binaryStr.length;
   const bytes = new Uint8Array(len);
   for (let i = 0; i < len; i++) {
     bytes[i] = binaryStr.charCodeAt(i);
   }
-  return bytes.buffer;
+  const mimeType = (match?.[1] || 'png').toLowerCase();
+  return {
+    data: bytes,
+    type: mimeType === 'jpeg' ? 'jpg' : mimeType,
+  };
+};
+
+const formatReportNumber = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '0.00';
+  if (Math.abs(number) < 0.005) return '0.00';
+  return number.toFixed(2);
+};
+
+const PORTRAIT_A4_SIZE = {
+  width: 11906,
+  height: 16838,
+  orientation: PageOrientation.PORTRAIT,
+};
+
+const LANDSCAPE_A4_SIZE = {
+  width: 16838,
+  height: 11906,
+  orientation: PageOrientation.LANDSCAPE,
+};
+
+const DEFAULT_PAGE_MARGIN = {
+  top: 720,
+  right: 720,
+  bottom: 720,
+  left: 720,
+};
+
+const PORTRAIT_PAGE = {
+  size: PORTRAIT_A4_SIZE,
+  margin: DEFAULT_PAGE_MARGIN,
+};
+
+const LANDSCAPE_PAGE = {
+  size: LANDSCAPE_A4_SIZE,
+  margin: DEFAULT_PAGE_MARGIN,
+};
+
+const fitImageToBox = (width, height, maxWidth, maxHeight) => {
+  const safeWidth = Number(width) > 0 ? Number(width) : 1;
+  const safeHeight = Number(height) > 0 ? Number(height) : 1;
+  const widthRatio = maxWidth / safeWidth;
+  const heightRatio = maxHeight / safeHeight;
+  const scale = Math.min(widthRatio, heightRatio, 1);
+
+  return {
+    width: Math.max(1, Math.round(safeWidth * scale)),
+    height: Math.max(1, Math.round(safeHeight * scale)),
+  };
 };
 
 const createTaskListTable = (tasks) => {
@@ -43,7 +97,7 @@ const createTaskListTable = (tasks) => {
 };
 
 const createReportTable = (results) => {
-  const tableHeaders = ["ID", "Наименование", "Длит.", "Трудоем.", "Исп.", "Ран. нач.", "Ран. ок.", "Позд. нач.", "Позд. ок.", "Полн. рез.", "Част. рез.", "Крит."];
+  const tableHeaders = ["ID", "Наименование", "Длит.", "Трудоем.", "Исп.", "Tр i", "Ран. ок.", "Tр j", "Позд. нач.", "Tп i", "Tп j", "R j", "Полн. рез.", "Част. рез.", "Крит."];
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: [
@@ -51,9 +105,15 @@ const createReportTable = (results) => {
       ...results.tasks.map(task => {
         const rowData = [
           task.id, task.name, task.duration.toString(), (task.laborIntensity || 0).toString(), task.numberOfPerformers.toString(),
-          task.earlyStart?.toFixed(2) || '0.00', task.earlyFinish?.toFixed(2) || '0.00',
-          task.lateStart?.toFixed(2) || '0.00', task.lateFinish?.toFixed(2) || '0.00',
-          task.totalFloat?.toFixed(2) || '0.00', task.freeFloat?.toFixed(2) || '0.00',
+          formatReportNumber(task.earlyEventTimeI ?? task.earlyStart),
+          formatReportNumber(task.earlyFinish),
+          formatReportNumber(task.earlyEventTimeJ),
+          formatReportNumber(task.lateStart),
+          formatReportNumber(task.lateEventTimeI),
+          formatReportNumber(task.lateEventTimeJ ?? task.lateFinish),
+          formatReportNumber(task.eventReserveJ),
+          formatReportNumber(task.totalFloat),
+          formatReportNumber(task.freeFloat),
           (!task.isDummy && task.isCritical) ? 'Да' : 'Нет',
         ];
         return new TableRow({
@@ -64,17 +124,35 @@ const createReportTable = (results) => {
   });
 };
 
-const getImageDimensions = (base64) => {
-    return new Promise((resolve) => {
-        if (!base64) {
-            resolve({ width: 1, height: 1 });
-            return;
-        }
-        const img = new Image();
-        img.onload = () => resolve({ width: img.width, height: img.height });
-        img.onerror = () => resolve({ width: 1, height: 1 });
-        img.src = base64;
-    });
+const getImageDimensions = (imagePayload) => {
+  if (!imagePayload?.data || imagePayload.type !== 'png' || imagePayload.data.byteLength < 24) {
+    return { width: 1, height: 1 };
+  }
+
+  const bytes = imagePayload.data;
+  const hasPngSignature =
+    bytes[0] === 137 &&
+    bytes[1] === 80 &&
+    bytes[2] === 78 &&
+    bytes[3] === 71 &&
+    bytes[4] === 13 &&
+    bytes[5] === 10 &&
+    bytes[6] === 26 &&
+    bytes[7] === 10;
+
+  if (!hasPngSignature) {
+    return { width: 1, height: 1 };
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const width = view.getUint32(16);
+  const height = view.getUint32(20);
+
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return { width: 1, height: 1 };
+  }
+
+  return { width, height };
 };
 
 
@@ -115,10 +193,14 @@ export const generateAndSaveWordReport = async ({ baseline, optimized }) => {
     const createTablesForSection = (planData, title, targetArray) => {
         if (!planData || !planData.tasks || !planData.results) return;
         targetArray.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_1 }));
-        targetArray.push(new Paragraph({ text: "Таблица 1. Исходные данные (список работ)", style: "strong" }));
+        targetArray.push(new Paragraph({
+          children: [new TextRun({ text: "Таблица 1. Исходные данные (список работ)", bold: true })],
+        }));
         targetArray.push(createTaskListTable(planData.tasks));
         targetArray.push(new Paragraph(""));
-        targetArray.push(new Paragraph({ text: "Таблица 2. Ведомость рассчитанных параметров работ (таблица 6.1.2)", style: "strong" }));
+        targetArray.push(new Paragraph({
+          children: [new TextRun({ text: "Таблица 2. Ведомость рассчитанных параметров работ (таблица 6.1.2)", bold: true })],
+        }));
         targetArray.push(createReportTable(planData.results));
     };
 
@@ -134,7 +216,10 @@ export const generateAndSaveWordReport = async ({ baseline, optimized }) => {
     const sections = [
 
         {
-            properties: { page: { size: { orientation: PageOrientation.PORTRAIT } } },
+            properties: {
+                type: SectionType.NEXT_PAGE,
+                page: { ...PORTRAIT_PAGE },
+            },
             children: mainContent,
         },
     ];
@@ -142,26 +227,19 @@ export const generateAndSaveWordReport = async ({ baseline, optimized }) => {
     const addImageAsNewSection = async (imageData, title, isFirstAppendix) => {
     if (!imageData) return;
 
-    const { width, height } = await getImageDimensions(imageData);
-    const buffer = base64ToBuffer(imageData);
+    const imagePayload = base64ToImageData(imageData);
+    const { width, height } = getImageDimensions(imagePayload);
     
-    const maxWidth = 840; 
-    const maxHeight = 500;
-    let newWidth, newHeight;
-    
-    if (title.includes("Сетевой график")) {
-        newWidth = maxWidth; 
-        newHeight = 150;    
-    } else { 
-        const aspectRatio = width / height;
-        if (width / maxWidth > height / maxHeight) {
-            newWidth = maxWidth;
-            newHeight = newWidth / aspectRatio;
-        } else {
-            newHeight = maxHeight;
-            newWidth = newHeight * aspectRatio;
-        }
-    }
+    const isNetworkDiagram = title.includes("Сетевой график");
+    const isGanttDiagram = title.includes("Диаграмма Ганта");
+    const maxWidth = isGanttDiagram ? 680 : 760;
+    const maxHeight = isGanttDiagram ? 380 : 320;
+    const fallbackWidth = isGanttDiagram ? 680 : 760;
+    const fallbackHeight = isGanttDiagram ? 380 : 320;
+    const { width: newWidth, height: newHeight } =
+      width > 1 && height > 1
+        ? fitImageToBox(width, height, maxWidth, maxHeight)
+        : { width: fallbackWidth, height: fallbackHeight };
 
     const appendixChildren = [];
 
@@ -169,7 +247,6 @@ export const generateAndSaveWordReport = async ({ baseline, optimized }) => {
         appendixChildren.push(new Paragraph({
             children: [new TextRun({ text: "Приложения", size: 32, bold: true })],
             alignment: AlignmentType.CENTER,
-            pageBreakBefore: true,
         }));
         if (hasComparison) {
 
@@ -186,35 +263,41 @@ export const generateAndSaveWordReport = async ({ baseline, optimized }) => {
     }));
 
     appendixChildren.push(new Paragraph({
-        children: [new ImageRun({ data: buffer, transformation: { width: newWidth, height: newHeight } })],
+        children: [new ImageRun({
+            data: imagePayload.data,
+            type: imagePayload.type,
+            transformation: {
+                width: Math.max(1, Math.round(newWidth)),
+                height: Math.max(1, Math.round(newHeight)),
+            },
+        })],
         alignment: AlignmentType.CENTER
     }));
 
     sections.push({
         properties: { 
-            page: { 
-                size: { orientation: PageOrientation.LANDSCAPE },
-            } 
+            type: SectionType.NEXT_PAGE,
+            page: { ...LANDSCAPE_PAGE },
         },
         children: appendixChildren,
     });
 };
 
     await addImageAsNewSection(optimized.networkImage, "Приложение А. Сетевой график", true); 
-    await addImageAsNewSection(optimized.ganttImage, "Приложение Б. Диаграмма Ганта", false);  
+
+    const ganttPages = Array.isArray(optimized.ganttImages) && optimized.ganttImages.length > 0
+      ? optimized.ganttImages
+      : (optimized.ganttImage ? [optimized.ganttImage] : []);
+
+    for (let index = 0; index < ganttPages.length; index += 1) {
+      const pageTitle = ganttPages.length > 1
+        ? `Приложение Б.${index + 1}. Диаграмма Ганта`
+        : "Приложение Б. Диаграмма Ганта";
+      await addImageAsNewSection(ganttPages[index], pageTitle, false);
+    }
 
     const doc = new Document({
-      sections: sections,
-      styles: {
-        paragraphStyles: [
-            
-             { id: "strong", name: "Strong", basedOn: "Normal", next: "Normal", run: { bold: true } },
-      { id: "Normal", name: "Normal", basedOn: "Normal", next: "Normal", run: { size: 22 } },
-     
-      { id: "main-heading", name: "Main Heading", basedOn: "Normal", next: "Normal", run: { size: 32, bold: true } }, 
-      { id: "sub-heading", name: "Sub Heading", basedOn: "Normal", next: "Normal", run: { size: 26, bold: true } },  
-    ],
-  },
+      sections,
     });
 
     const blob = await Packer.toBlob(doc);

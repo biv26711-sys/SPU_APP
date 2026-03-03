@@ -20,9 +20,20 @@ import ResourceManagement from './ResourceManagement';
 const formatNumberForCSV = (num) => {
   const number = Number(num);
   if (Number.isFinite(number)) {
+    if (Math.abs(number) < 0.005) {
+      return '0,00';
+    }
     return number.toFixed(2).replace('.', ',');
   }
   return '0,00';
+};
+
+const formatDisplayNumber = (num) => {
+  const number = Number(num);
+  if (!Number.isFinite(number) || Math.abs(number) < 0.005) {
+    return '0.00';
+  }
+  return number.toFixed(2);
 };
 
 const CalculationResults = ({ results, project }) => {
@@ -55,10 +66,13 @@ const CalculationResults = ({ results, project }) => {
       'Трудоемкость (н-ч)',
       'Количество исполнителей',
       'Предшественники',
-      'Раннее начало',
+      'Ранний срок наступления предшествующего события',
       'Раннее окончание',
+      'Ранний срок наступления последующего события',
       'Позднее начало',
-      'Позднее окончание',
+      'Поздний срок наступления предшествующего события',
+      'Поздний срок наступления последующего события',
+      'Резерв времени последующего события',
       'Полный резерв',
       'Частный резерв',
       'Критическая работа'
@@ -75,10 +89,13 @@ const CalculationResults = ({ results, project }) => {
           task.laborIntensity || 0,
           task.numberOfPerformers,
           `"${(task.predecessors || []).join(', ')}"`,
-          formatNumberForCSV(task.earlyStart),
+          formatNumberForCSV(task.earlyEventTimeI ?? task.earlyStart),
           formatNumberForCSV(task.earlyFinish),
+          formatNumberForCSV(task.earlyEventTimeJ),
           formatNumberForCSV(task.lateStart),
-          formatNumberForCSV(task.lateFinish),
+          formatNumberForCSV(task.lateEventTimeI),
+          formatNumberForCSV(task.lateEventTimeJ ?? task.lateFinish),
+          formatNumberForCSV(task.eventReserveJ),
           formatNumberForCSV(task.totalFloat),
           formatNumberForCSV(task.freeFloat),
           (!task.isDummy && task.isCritical) ? 'Да' : 'Нет'
@@ -196,7 +213,7 @@ const CalculationResults = ({ results, project }) => {
               <CardTitle className="flex items-center justify-between">
                 <span className="flex items-center gap-2">
                   <FileSpreadsheet className="h-5 w-5" />
-                  Таблица 6.1.2 - Параметры сетевого графика
+                  Параметры сетевого графика
                 </span>
                 <Button onClick={exportToCSV} size="sm" variant="outline">
                   <Download className="h-4 w-4 mr-2" />
@@ -225,16 +242,25 @@ const CalculationResults = ({ results, project }) => {
                         Количество исполнителей
                       </th>
                       <th className="border border-gray-300 px-3 py-2 text-center font-medium">
-                        Раннее начало
+                        Ранний срок наступления предшествующего события
                       </th>
                       <th className="border border-gray-300 px-3 py-2 text-center font-medium">
                         Раннее окончание
                       </th>
                       <th className="border border-gray-300 px-3 py-2 text-center font-medium">
+                        Ранний срок наступления последующего события
+                      </th>
+                      <th className="border border-gray-300 px-3 py-2 text-center font-medium">
                         Позднее начало
                       </th>
                       <th className="border border-gray-300 px-3 py-2 text-center font-medium">
-                        Позднее окончание
+                        Поздний срок наступления предшествующего события
+                      </th>
+                      <th className="border border-gray-300 px-3 py-2 text-center font-medium">
+                        Поздний срок наступления последующего события
+                      </th>
+                      <th className="border border-gray-300 px-3 py-2 text-center font-medium">
+                        Резерв времени последующего события
                       </th>
                       <th className="border border-gray-300 px-3 py-2 text-center font-medium">
                         Полный резерв времени
@@ -274,25 +300,36 @@ const CalculationResults = ({ results, project }) => {
                             {task.numberOfPerformers}
                           </td>
                           <td className="border border-gray-300 px-3 py-2 text-center">
-                            {task.earlyStart?.toFixed(2) || '0.00'}
+                            {formatDisplayNumber(task.earlyEventTimeI ?? task.earlyStart)}
                           </td>
                           <td className="border border-gray-300 px-3 py-2 text-center">
-                            {task.earlyFinish?.toFixed(2) || task.duration?.toFixed(2)}
+                            {formatDisplayNumber(task.earlyFinish ?? task.duration)}
                           </td>
                           <td className="border border-gray-300 px-3 py-2 text-center">
-                            {task.lateStart?.toFixed(2) || '0.00'}
+                            {formatDisplayNumber(task.earlyEventTimeJ)}
                           </td>
                           <td className="border border-gray-300 px-3 py-2 text-center">
-                            {task.lateFinish?.toFixed(2) || task.duration?.toFixed(2)}
+                            {formatDisplayNumber(task.lateStart)}
+                          </td>
+                          <td className="border border-gray-300 px-3 py-2 text-center">
+                            {formatDisplayNumber(task.lateEventTimeI)}
+                          </td>
+                          <td className="border border-gray-300 px-3 py-2 text-center">
+                            {formatDisplayNumber(task.lateEventTimeJ ?? task.lateFinish ?? task.duration)}
+                          </td>
+                          <td className="border border-gray-300 px-3 py-2 text-center">
+                            <span className={task.eventReserveJ > 0.001 ? 'text-emerald-600 font-medium' : 'text-gray-500'}>
+                              {formatDisplayNumber(task.eventReserveJ)}
+                            </span>
                           </td>
                           <td className="border border-gray-300 px-3 py-2 text-center">
                             <span className={task.totalFloat > 0.001 ? 'text-orange-600 font-medium' : 'text-gray-500'}>
-                              {task.totalFloat?.toFixed(2) || '0.00'}
+                              {formatDisplayNumber(task.totalFloat)}
                             </span>
                           </td>
                           <td className="border border-gray-300 px-3 py-2 text-center">
                             <span className={task.freeFloat > 0.001 ? 'text-blue-600 font-medium' : 'text-gray-500'}>
-                              {task.freeFloat?.toFixed(2) || '0.00'}
+                              {formatDisplayNumber(task.freeFloat)}
                             </span>
                           </td>
                           <td className="border border-gray-300 px-3 py-2 text-center">
@@ -320,6 +357,7 @@ const CalculationResults = ({ results, project }) => {
                         <div className="mt-2 space-y-1 text-sm">
                           <p>Предшественники: {task.predecessors.length > 0 ? task.predecessors.join(', ') : 'нет'}</p>
                           <p>Резерв времени: {task.totalFloat > 0.001 ? `${task.totalFloat.toFixed(2)} дней` : 'отсутствует'}</p>
+                          <p>Резерв времени последующего события: {task.eventReserveJ > 0.001 ? `${task.eventReserveJ.toFixed(2)} дней` : 'отсутствует'}</p>
                           <p>Статус: 
                             {(() => { 
                               const isCriticalVisual = !task.isDummy && task.isCritical;
@@ -341,6 +379,8 @@ const CalculationResults = ({ results, project }) => {
                 <p><strong>Обозначения:</strong></p>
                 <ul className="list-disc list-inside space-y-1">
                   <li>К - работа принадлежит критическому пути</li>
+                  <li>Поздний срок наступления предшествующего события равен Tп_i, а последующего события - Tп_j</li>
+                  <li>Резерв времени последующего события относится к узлу j и повторяется у всех работ, входящих в это событие</li>
                   <li>Полный резерв времени - максимальная задержка без влияния на срок проекта</li>
                   <li>Частный резерв времени - задержка без влияния на раннее начало последующих работ</li>
                   <li>Критические работы выделены красным фоном</li>

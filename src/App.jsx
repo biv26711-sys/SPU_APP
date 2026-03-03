@@ -21,14 +21,16 @@ import {
   Users,
   Save,
   ScrollText,
-  BookOpen 
+  BookOpen,
+  ChevronLeft,
+  ChevronRight 
 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 
 import GostViewer from './components/GostViewer';
@@ -49,6 +51,7 @@ import UserGuide from './components/UserGuide';
 import { SPUCalculation } from './utils/spuCalculations';
 import { validateNetwork } from './utils/calculations';
 import { sampleTasks as exampleTasks } from './types/index';
+import { calcDurationDays, calcLaborHours, roundToOneDecimal } from './utils/time';
 import logger from './utils/logger';
 import useAutosave from './hooks/useAutosave';
 import './App.css';
@@ -64,6 +67,7 @@ function App() {
   });
   const [resourceLimit, setResourceLimit] = useState(10);
   const [lastNumericLimit, setLastNumericLimit] = useState(10); 
+  const [hoursPerDay, setHoursPerDay] = useState(8);
   const maxPerformersPerTask = project.tasks.reduce((max, task) => Math.max(max, task.numberOfPerformers), 0);
   const isResourceLimitExceeded = maxPerformersPerTask > resourceLimit;
 
@@ -76,10 +80,43 @@ function App() {
   const [appZoom, setAppZoom] = useState(1);
   const networkDiagramRef = useRef(null);
   const ganttChartRef = useRef(null);
+  const networkExportRef = useRef(null);
+  const ganttExportRef = useRef(null);
   const userGuideRef = useRef(null);
   const [isExportingWord, setIsExportingWord] = useState(false);
   const { loadAutosavedData, clearAutosavedData, hasAutosavedData } = useAutosave(project, calculationResults);
   const [isGostModalOpen, setGostModalOpen] = useState(false);
+  const tabsListRef = useRef(null);
+  const [isTabsOverflowing, setIsTabsOverflowing] = useState(false);
+  const [isTabsAtStart, setIsTabsAtStart] = useState(true);
+  const [isTabsAtEnd, setIsTabsAtEnd] = useState(false);
+  const [missingDepsDialogOpen, setMissingDepsDialogOpen] = useState(false);
+  const [missingDepsInfo, setMissingDepsInfo] = useState({ missingIds: [], byTask: [] });
+  const [currentMissingTaskIndex, setCurrentMissingTaskIndex] = useState(0);
+  const [manualPredecessorSelections, setManualPredecessorSelections] = useState(['']);
+  const [missingDepsDialogError, setMissingDepsDialogError] = useState('');
+  const [isResolvingMissingDeps, setIsResolvingMissingDeps] = useState(false);
+
+  const updateTabsScrollState = () => {
+    const el = tabsListRef.current;
+    if (!el) return;
+    const hasOverflow = el.scrollWidth > el.clientWidth + 1;
+    setIsTabsOverflowing(hasOverflow);
+    if (!hasOverflow) {
+      setIsTabsAtStart(true);
+      setIsTabsAtEnd(true);
+      return;
+    }
+    setIsTabsAtStart(el.scrollLeft <= 1);
+    setIsTabsAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
+  };
+
+  const scrollTabs = (direction) => {
+    const el = tabsListRef.current;
+    if (!el) return;
+    const delta = Math.round(el.clientWidth * 0.7);
+    el.scrollBy({ left: direction === 'left' ? -delta : delta, behavior: 'smooth' });
+  };
 
 
   useEffect(() => {
@@ -90,6 +127,50 @@ function App() {
     window.electronAPI?.removeAllListeners?.('menu-show-gost');
   };
 }, []);
+
+  useEffect(() => {
+    let didChange = false;
+    const updatedTasks = project.tasks.map(task => {
+      const laborHours = Number.isFinite(+task.laborIntensity) ? +task.laborIntensity : null;
+      const performers = Math.max(1, parseInt(task.numberOfPerformers, 10) || 1);
+      if (laborHours != null && laborHours > 0) {
+        const duration = calcDurationDays(laborHours, performers, hoursPerDay);
+        if (Number.isFinite(duration) && duration !== task.duration) {
+          didChange = true;
+          return { ...task, duration };
+        }
+      }
+      return task;
+    });
+
+    if (!didChange) return;
+    setProject(prev => ({ ...prev, tasks: updatedTasks }));
+    setCalculationResults(null);
+    setBaselinePlan(null);
+    setValidationErrors([]);
+  }, [hoursPerDay, project.tasks]);
+
+  useEffect(() => {
+    const el = tabsListRef.current;
+    if (!el) return;
+    const handleResize = () => updateTabsScrollState();
+    const handleScroll = () => updateTabsScrollState();
+    updateTabsScrollState();
+    window.addEventListener('resize', handleResize);
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    let resizeObserver;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => updateTabsScrollState());
+      resizeObserver.observe(el);
+    }
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      el.removeEventListener('scroll', handleScroll);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     logger.logSystemEvent('APP_MOUNTED', {
@@ -170,12 +251,22 @@ function App() {
   setIsExportingWord(true);
 
   try {
-    const networkImagePromise = networkDiagramRef.current?.getAsBase64();
-    const ganttImagePromise = ganttChartRef.current?.getAsBase64();
+    await new Promise(resolve => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(resolve);
+      });
+    });
 
-    const [networkImage, ganttImage] = await Promise.all([
+    const networkSource = networkExportRef.current || networkDiagramRef.current;
+    const ganttSource = ganttExportRef.current || ganttChartRef.current;
+    const networkImagePromise = networkSource?.getAsBase64();
+    const ganttImagePromise = ganttSource?.getAsBase64();
+    const ganttImagesPromise = ganttSource?.getPaginatedBase64?.() || [];
+
+    const [networkImage, ganttImage, ganttImages] = await Promise.all([
       networkImagePromise,
       ganttImagePromise,
+      ganttImagesPromise,
     ]);
 
     const baselineData = baselinePlan
@@ -190,6 +281,7 @@ function App() {
       results: calculationResults,
       networkImage: networkImage,
       ganttImage: ganttImage,
+      ganttImages: ganttImages,
     };
 
     await generateAndSaveWordReport({
@@ -338,11 +430,14 @@ function App() {
 
   const handleAddTask = (task) => {
     try {
+      const performers = Math.max(1, parseInt(task.numberOfPerformers, 10) || 1);
       const newTask = {
         ...task,
         id: task.id || `${task.from}-${task.to}`,
-        laborIntensity: task.laborIntensity || task.duration * 8,
-        numberOfPerformers: task.numberOfPerformers || 1
+        laborIntensity: Number.isFinite(+task.laborIntensity)
+          ? +task.laborIntensity
+          : calcLaborHours(task.duration, performers, hoursPerDay),
+        numberOfPerformers: performers
       };
 
       const updatedTasks = [...project.tasks, newTask];
@@ -422,21 +517,295 @@ function App() {
     if (idx === 1) return handleLoadRequiredFromDB();
   };
 
+  const normalizePredecessors = (task) => {
+    if (Array.isArray(task?.predecessors)) {
+      return task.predecessors.map(p => String(p).trim()).filter(Boolean);
+    }
+    if (typeof task?.predecessors === 'string' && task.predecessors.trim()) {
+      return task.predecessors
+        .split(',')
+        .map(p => String(p).trim())
+        .filter(Boolean);
+    }
+    return [];
+  };
 
-  const handleCalculate = async () => {
-  setIsCalculating(true);
+  const getTaskOrderIndexMap = (tasks) => {
+    const map = new Map();
+    (Array.isArray(tasks) ? tasks : []).forEach((task, index) => {
+      const id = String(task?.id ?? '').trim();
+      if (id && !map.has(id)) map.set(id, index);
+    });
+    return map;
+  };
+
+  const findPredecessorOrderViolations = (tasks) => {
+    const list = Array.isArray(tasks) ? tasks : [];
+    const indexMap = getTaskOrderIndexMap(list);
+    const errors = [];
+
+    list.forEach((task, taskIndex) => {
+      const taskId = String(task?.id ?? '').trim();
+      if (!taskId) return;
+      const badPreds = normalizePredecessors(task)
+        .filter(predId => indexMap.has(predId) && indexMap.get(predId) >= taskIndex);
+      if (badPreds.length > 0) {
+        errors.push(`Для задачи ${taskId} предшественники должны быть выше по списку: ${badPreds.join(', ')}`);
+      }
+    });
+
+    return errors;
+  };
+
+  const getMissingPredecessorInfo = (tasks) => {
+    const list = Array.isArray(tasks) ? tasks : [];
+    const tasksById = new Map();
+    list.forEach(task => {
+      const id = String(task?.id ?? '').trim();
+      if (id && !tasksById.has(id)) tasksById.set(id, task);
+    });
+    const byTask = [];
+
+    list.forEach(task => {
+      const taskId = String(task?.id ?? '').trim();
+      if (!taskId) return;
+      const predecessors = normalizePredecessors(task);
+      const taskTemplateId = String(task?.templateId ?? '').trim();
+      const isTemplateStrictMode = taskTemplateId && task?.predecessorBindingMode !== 'manual';
+      const existingForTask = [];
+      const missingForTask = [];
+      predecessors.forEach(predId => {
+        const candidate = tasksById.get(predId);
+        if (!candidate) {
+          missingForTask.push(predId);
+          return;
+        }
+
+        if (!isTemplateStrictMode) {
+          existingForTask.push(predId);
+          return;
+        }
+
+        const candidateTemplateId = String(candidate?.templateId ?? '').trim();
+        if (candidateTemplateId && candidateTemplateId === predId) {
+          existingForTask.push(predId);
+          return;
+        }
+
+        missingForTask.push(predId);
+      });
+      const uniqueExisting = Array.from(new Set(existingForTask));
+      const uniqueMissing = Array.from(new Set(missingForTask));
+      if (uniqueMissing.length > 0 && uniqueExisting.length === 0) {
+        byTask.push({
+          taskId,
+          taskName: String(task?.name ?? ''),
+          missingIds: uniqueMissing,
+        });
+      }
+    });
+
+    const missingIds = Array.from(new Set(byTask.flatMap(item => item.missingIds))).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    );
+
+    return {
+      missingIds,
+      byTask,
+    };
+  };
+
+  const applyManualPredecessorMappingForTask = (tasks, targetTaskId, selectedPredecessors) => {
+    const list = Array.isArray(tasks) ? tasks : [];
+    const orderIndexMap = getTaskOrderIndexMap(list);
+    const idPool = new Set(orderIndexMap.keys());
+    const targetIndex = orderIndexMap.get(targetTaskId);
+
+    if (!Number.isInteger(targetIndex)) {
+      return { ok: false, reason: 'target_not_found', tasks };
+    }
+
+    const manualSelected = (Array.isArray(selectedPredecessors) ? selectedPredecessors : [])
+      .map(id => String(id || '').trim())
+      .filter(Boolean);
+
+    if (manualSelected.length === 0) {
+      return { ok: false, reason: 'at_least_one_required', tasks };
+    }
+
+    const mappedTasks = list.map(task => {
+      const taskId = String(task?.id ?? '').trim();
+      if (taskId !== targetTaskId) return task;
+
+      const originalPreds = normalizePredecessors(task);
+      const preservedExisting = originalPreds.filter(predId =>
+        idPool.has(predId) && predId !== taskId && orderIndexMap.get(predId) < targetIndex
+      );
+      const manualResolved = manualSelected
+        .filter(predId =>
+          idPool.has(predId) && predId !== taskId && orderIndexMap.get(predId) < targetIndex
+        );
+
+      return {
+        ...task,
+        predecessors: Array.from(new Set([...preservedExisting, ...manualResolved])),
+        predecessorBindingMode: 'manual',
+      };
+    });
+
+    return { ok: true, reason: '', tasks: mappedTasks };
+  };
+
+  const openMissingDepsResolver = (info, errorMessage = '', preferredTaskId = null) => {
+    const byTask = Array.isArray(info?.byTask) ? info.byTask : [];
+    const fallbackIndex = 0;
+    const preferredIndex = preferredTaskId
+      ? byTask.findIndex(item => item.taskId === preferredTaskId)
+      : -1;
+    const nextIndex = preferredIndex >= 0 ? preferredIndex : fallbackIndex;
+    const currentTask = byTask[nextIndex] || null;
+
+    setManualPredecessorSelections(['']);
+    setMissingDepsInfo(info);
+    setCurrentMissingTaskIndex(nextIndex);
+    setMissingDepsDialogError(errorMessage);
+    setMissingDepsDialogOpen(true);
+  };
+
+  const handleApplyManualMappingAndCalculate = async () => {
+    setIsResolvingMissingDeps(true);
+    setMissingDepsDialogError('');
+
+    try {
+      const sourceTasks = Array.isArray(project.tasks) ? project.tasks : [];
+      const currentTask = (missingDepsInfo.byTask || [])[currentMissingTaskIndex];
+      const currentTaskId = currentTask?.taskId || '';
+      const currentMissingIds = currentTask?.missingIds || [];
+
+      if (!currentTaskId || currentMissingIds.length === 0) {
+        setMissingDepsDialogOpen(false);
+        return;
+      }
+
+      const orderIndexMap = getTaskOrderIndexMap(sourceTasks);
+      const currentIndex = orderIndexMap.get(currentTaskId);
+      if (!Number.isInteger(currentIndex)) {
+        setMissingDepsDialogError('Не удалось определить позицию текущей задачи в списке.');
+        return;
+      }
+
+      const idPool = new Set(orderIndexMap.keys());
+      const selectedEntries = manualPredecessorSelections
+        .map(value => String(value || '').trim())
+        .filter(Boolean);
+      const uniqueSelectedEntries = Array.from(new Set(selectedEntries));
+      const maxAllowedPredecessors = Math.min(Math.max(currentIndex, 0), 4);
+
+      if (maxAllowedPredecessors === 0) {
+        setMissingDepsDialogError('Для текущей задачи нет допустимых предшественников выше по списку. Измените порядок задач в списке.');
+        return;
+      }
+
+      if (uniqueSelectedEntries.length > maxAllowedPredecessors) {
+        setMissingDepsDialogError(
+          `Можно выбрать не более ${maxAllowedPredecessors} предшественников для текущей задачи.`
+        );
+        return;
+      }
+
+      if (selectedEntries.length === 0) {
+        setMissingDepsDialogError('Выберите вручную хотя бы одного предшественника для текущей задачи.');
+        return;
+      }
+
+      if (selectedEntries.length !== uniqueSelectedEntries.length) {
+        setMissingDepsDialogError('Нельзя выбирать одного и того же предшественника несколько раз.');
+        return;
+      }
+
+      const invalidTargets = selectedEntries
+        .filter(targetId => {
+          const targetIndex = orderIndexMap.get(targetId);
+          return !idPool.has(targetId) || targetId === currentTaskId || !Number.isInteger(targetIndex) || targetIndex >= currentIndex;
+        })
+        .map(targetId => targetId);
+
+      if (invalidTargets.length > 0) {
+        setMissingDepsDialogError(
+          `Выберите корректные работы выше текущей задачи. Некорректный выбор: ${invalidTargets.join(', ')}`
+        );
+        return;
+      }
+
+      const mapped = applyManualPredecessorMappingForTask(
+        sourceTasks,
+        currentTaskId,
+        uniqueSelectedEntries
+      );
+
+      if (!mapped.ok) {
+        if (mapped.reason === 'at_least_one_required') {
+          setMissingDepsDialogError('Выберите вручную хотя бы одного предшественника для текущей задачи.');
+        } else if (mapped.reason === 'target_not_found') {
+          setMissingDepsDialogError('Текущая задача не найдена в списке работ.');
+        } else {
+          setMissingDepsDialogError('Не удалось применить ручной выбор для текущей задачи.');
+        }
+        return;
+      }
+
+      setProject(prev => ({ ...prev, tasks: mapped.tasks }));
+      setCalculationResults(null);
+      setValidationErrors([]);
+
+      const remaining = getMissingPredecessorInfo(mapped.tasks);
+      if (remaining.missingIds.length > 0) {
+        openMissingDepsResolver(remaining);
+        return;
+      }
+
+      setMissingDepsDialogOpen(false);
+      await handleCalculate({ skipMissingDependencyCheck: false, tasksOverride: mapped.tasks });
+    } finally {
+      setIsResolvingMissingDeps(false);
+    }
+  };
+
+  const handleCalculate = async ({ skipMissingDependencyCheck = false, tasksOverride = null } = {}) => {
   setValidationErrors([]);
+
+  const sourceTasks = Array.isArray(tasksOverride) ? tasksOverride : (Array.isArray(project.tasks) ? project.tasks : []);
+  if (!skipMissingDependencyCheck) {
+    const missingInfo = getMissingPredecessorInfo(sourceTasks);
+    if (missingInfo.missingIds.length > 0) {
+      openMissingDepsResolver(missingInfo);
+      return;
+    }
+  }
+
+  const orderErrors = findPredecessorOrderViolations(sourceTasks);
+  if (orderErrors.length > 0) {
+    setValidationErrors(orderErrors);
+    logger.logCalculationError(new Error('Predecessor order validation failed'), {
+      errors: orderErrors,
+      tasksCount: sourceTasks.length,
+    });
+    setActiveTab('input');
+    return;
+  }
+
+  setIsCalculating(true);
 
   try { 
     logger.logUserAction('START_CALCULATION', {
-      tasksCount: project.tasks.length,
+      tasksCount: sourceTasks.length,
       projectId: project.id
     });
 
-    const source = Array.isArray(project.tasks) ? project.tasks : [];
-    const needsAdapt = source.some(t => !looksLikeEdgeId(String(t.id)));
-    const tasksForCalc = needsAdapt ? aonToAoa(source, { hoursPerDay: 6, createSink: true }) : source;
-    const HOURS_PER_DAY = 6;
+    const needsAdapt = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)));
+    const tasksForCalc = needsAdapt
+      ? aonToAoa(sourceTasks, { hoursPerDay, createSink: true })
+      : sourceTasks;
     const normalizedTasks = tasksForCalc.map(t => {
       const p = Math.max(1, parseInt(t.numberOfPerformers, 10) || 1);
       const isDummy = t.isDummy === true || Number(t.duration) === 0;
@@ -447,10 +816,10 @@ function App() {
       if (isDummy) {
         durationDays = 0;
       } else if (laborHours != null && laborHours > 0) {
-        durationDays = Math.max(1, Math.ceil(laborHours / (HOURS_PER_DAY * p)));
+        durationDays = Math.max(0.1, calcDurationDays(laborHours, p, hoursPerDay));
       } else {
         const d = Number.isFinite(+t.duration) ? +t.duration : 0;
-        durationDays = Math.max(1, Math.ceil(d || 1));
+        durationDays = Math.max(0.1, roundToOneDecimal(d || 0));
       }
 
       const preds = Array.isArray(t.predecessors)
@@ -464,11 +833,14 @@ function App() {
         isDummy,
         numberOfPerformers: p,
         duration: durationDays,
+        laborIntensity: laborHours != null && laborHours > 0
+          ? laborHours
+          : calcLaborHours(durationDays, p, hoursPerDay),
         predecessors: preds,
       };
     });
 
-    const validation = validateNetwork(normalizedTasks);
+    const validation = validateNetwork(normalizedTasks, { hoursPerDay });
     if (!validation.isValid) {
       setValidationErrors(validation.errors);
       logger.logCalculationError(new Error('Validation failed'), {
@@ -478,14 +850,14 @@ function App() {
       return;
     }
 
-    const result = SPUCalculation.calculateNetworkParameters(normalizedTasks);
+    const result = SPUCalculation.calculateNetworkParameters(normalizedTasks, { hoursPerDay });
 
     if (result.isValid) {
 
     if (!baselinePlan) {
     
       const snapshot = {
-        tasks: JSON.parse(JSON.stringify(project.tasks)), 
+        tasks: JSON.parse(JSON.stringify(sourceTasks)), 
         results: JSON.parse(JSON.stringify(result)),      
     
         networkImage: null,
@@ -509,7 +881,7 @@ function App() {
       if (userChoice) {
       
         const snapshot = {
-          tasks: JSON.parse(JSON.stringify(project.tasks)),
+          tasks: JSON.parse(JSON.stringify(sourceTasks)),
           results: JSON.parse(JSON.stringify(result)),
           networkImage: null,
           ganttImage: null,
@@ -545,7 +917,7 @@ function App() {
   } catch (error) {
     setValidationErrors([error.message]);
     logger.logCalculationError(error, {
-      tasksCount: project.tasks.length,
+      tasksCount: sourceTasks.length,
       projectId: project.id
     });
   } finally {
@@ -580,11 +952,12 @@ function App() {
         const req = (await window.electronAPI.invoke('templates:requiredFor', tpl.id)) || [];
         const preds = req.map(p => String(p.id));
 
-        const hours = Math.ceil((tpl.base_duration_minutes || 0) / 60);
-        const days  = Math.max(1, Math.ceil((tpl.base_duration_minutes || 0) / 1440));
+        const hours = roundToOneDecimal((tpl.base_duration_minutes || 0) / 60);
+        const days = Math.max(0.1, calcDurationDays(hours, 1, hoursPerDay));
 
         tasks.push({
           id: String(tpl.id),
+          templateId: String(tpl.id),
           name: tpl.name,
           duration: days,
           laborIntensity: hours,
@@ -697,6 +1070,47 @@ function App() {
     setShowRecoveryDialog(false);
     logger.logUserAction('DISCARD_AUTOSAVED_DATA');
   };
+
+  const missingTaskQueue = Array.isArray(missingDepsInfo.byTask) ? missingDepsInfo.byTask : [];
+  const activeMissingTask = missingTaskQueue[currentMissingTaskIndex] || null;
+  const activeMissingIds = activeMissingTask?.missingIds || [];
+  const activeTaskOrderIndex = (() => {
+    const map = getTaskOrderIndexMap(project.tasks);
+    return activeMissingTask ? map.get(activeMissingTask.taskId) : -1;
+  })();
+  const allowedManualPredecessorOptions = project.tasks
+    .map(task => ({
+      id: String(task?.id ?? '').trim(),
+      name: task?.name,
+    }))
+    .filter((task, index) =>
+      task.id &&
+      index < activeTaskOrderIndex &&
+      task.id !== activeMissingTask?.taskId
+    )
+    .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' }));
+  const maxManualPredecessors = Math.min(
+    Math.max(activeTaskOrderIndex, 0),
+    4,
+    allowedManualPredecessorOptions.length
+  );
+  const hasEmptyManualSelection = manualPredecessorSelections.some(value => !String(value || '').trim());
+  const canAddManualPredecessor = maxManualPredecessors > 0 &&
+    manualPredecessorSelections.length < maxManualPredecessors &&
+    !hasEmptyManualSelection;
+  const calculatedEdgeIdByTaskId = (() => {
+    const map = {};
+    const tasks = Array.isArray(calculationResults?.tasks) ? calculationResults.tasks : [];
+    tasks.forEach(task => {
+      if (!task || task.isDummy === true) return;
+      const edgeId = String(task.id ?? '').trim();
+      if (!looksLikeEdgeId(edgeId)) return;
+      const sourceId = String(task.sourceTaskId ?? edgeId).trim();
+      if (!sourceId) return;
+      map[sourceId] = edgeId;
+    });
+    return map;
+  })();
 
   return (
     <div className="min-h-screen w-full bg-background text-foreground">
@@ -829,36 +1243,64 @@ function App() {
         </Card>
       
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
-            <TabsList className="tabs-list grid w-full grid-cols-2 lg:grid-cols-7 min-w-max">
-            <TabsTrigger value="input" className="tabs-trigger flex items-center gap-2">
-              <FileText className="h-4 w-4" />
-              <span className="hidden sm:inline">Ввод работ</span>
-            </TabsTrigger>
-            <TabsTrigger value="network" className="tabs-trigger flex items-center gap-2">
-              <Network className="h-4 w-4" />
-              <span className="hidden sm:inline">Сетевой график</span>
-            </TabsTrigger>
-            <TabsTrigger value="results" className="tabs-trigger flex items-center gap-2">
-              <Calculator className="h-4 w-4" />
-              <span className="hidden sm:inline">Результаты</span>
-            </TabsTrigger>
-            <TabsTrigger value="gantt" className="tabs-trigger flex items-center gap-2">
-              <BarChart3 className="h-4 w-4" />
-              <span className="hidden sm:inline">Диаграмма Ганта</span>
-            </TabsTrigger>
-            <TabsTrigger value="calendar" className="tabs-trigger flex items-center gap-2">
-              <Activity className="h-4 w-4" />
-              <span className="hidden sm:inline">Календарь</span>
-            </TabsTrigger>
-            <TabsTrigger value="analysis" className="tabs-trigger flex items-center gap-2">
-              <BarChart3 className="h-4 w-4" />
-              <span className="hidden sm:inline">Анализ</span>
-            </TabsTrigger>
-            <TabsTrigger value="tools" className="tabs-trigger flex items-center gap-2">
-              <Settings className="h-4 w-4" />
-              <span className="hidden sm:inline">Инструменты</span>
-            </TabsTrigger>
-          </TabsList>
+          <div className="tabs-list-container">
+            {isTabsOverflowing && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="tabs-scroll-button"
+                onClick={() => scrollTabs('left')}
+                disabled={isTabsAtStart}
+                aria-label="Прокрутить вкладки влево"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+            )}
+            <TabsList ref={tabsListRef} className="tabs-list flex flex-1 w-full flex-nowrap gap-2 justify-start">
+              <TabsTrigger value="input" className="tabs-trigger flex items-center gap-2">
+                <FileText className="h-4 w-4" />
+                <span className="hidden sm:inline">Ввод работ</span>
+              </TabsTrigger>
+              <TabsTrigger value="network" className="tabs-trigger flex items-center gap-2">
+                <Network className="h-4 w-4" />
+                <span className="hidden sm:inline">Сетевой график</span>
+              </TabsTrigger>
+              <TabsTrigger value="results" className="tabs-trigger flex items-center gap-2">
+                <Calculator className="h-4 w-4" />
+                <span className="hidden sm:inline">Результаты</span>
+              </TabsTrigger>
+              <TabsTrigger value="gantt" className="tabs-trigger flex items-center gap-2">
+                <BarChart3 className="h-4 w-4" />
+                <span className="hidden sm:inline">Диаграмма Ганта</span>
+              </TabsTrigger>
+              <TabsTrigger value="calendar" className="tabs-trigger flex items-center gap-2">
+                <Activity className="h-4 w-4" />
+                <span className="hidden sm:inline">Календарь</span>
+              </TabsTrigger>
+              <TabsTrigger value="analysis" className="tabs-trigger flex items-center gap-2">
+                <BarChart3 className="h-4 w-4" />
+                <span className="hidden sm:inline">Анализ</span>
+              </TabsTrigger>
+              <TabsTrigger value="tools" className="tabs-trigger flex items-center gap-2">
+                <Settings className="h-4 w-4" />
+                <span className="hidden sm:inline">Инструменты</span>
+              </TabsTrigger>
+            </TabsList>
+            {isTabsOverflowing && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="tabs-scroll-button"
+                onClick={() => scrollTabs('right')}
+                disabled={isTabsAtEnd}
+                aria-label="Прокрутить вкладки вправо"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
 
             <TabsContent value="input" className="space-y-4">
               <TaskInput 
@@ -870,6 +1312,10 @@ function App() {
                 maxPerformers={maxPerformersPerTask} 
                  lastNumericLimit={lastNumericLimit}
                 onLastNumericLimitChange={setLastNumericLimit}
+                hoursPerDay={hoursPerDay}
+                onHoursPerDayChange={setHoursPerDay}
+                calculatedEdgeIdByTaskId={calculatedEdgeIdByTaskId}
+                showCalculatedEdgeIds={!!calculationResults}
               />
             </TabsContent>
 
@@ -889,7 +1335,13 @@ function App() {
           </TabsContent>
 
          <TabsContent value="network" className="space-y-4">
-            {calculationResults ? ( <NetworkDiagram ref={networkDiagramRef} results={calculationResults} />) : (
+            {calculationResults ? (
+              <NetworkDiagram
+                ref={networkDiagramRef}
+                results={calculationResults}
+                hoursPerDay={hoursPerDay}
+              />
+            ) : (
               <Card>
               <CardContent className="text-center py-8">
                 <Network className="h-12 w-12 mx-auto text-gray-400 mb-4" />
@@ -901,7 +1353,7 @@ function App() {
           </TabsContent>
 
           <TabsContent value="gantt" className="space-y-4">
-             {calculationResults ? ( <GanttChart ref={ganttChartRef} results={calculationResults} project={project} />) : (
+             {calculationResults ? ( <GanttChart ref={ganttChartRef} results={calculationResults} project={project} resourceLimit={resourceLimit}/>) : (
               <Card>
                 <CardContent className="text-center py-8">
                   <BarChart3 className="h-12 w-12 mx-auto text-gray-400 mb-4" />
@@ -921,7 +1373,7 @@ function App() {
               
               <TabsContent value="dashboard">
                 {calculationResults ? (
-                  <ProjectDashboard results={calculationResults} project={project} />
+                  <ProjectDashboard results={calculationResults} project={project} hoursPerDay={hoursPerDay} />
                 ) : (
                   <Card>
                     <CardContent className="text-center py-8">
@@ -936,7 +1388,7 @@ function App() {
               
               <TabsContent value="resources">
                 {calculationResults ? (
-                  <ResourceManagement results={calculationResults} project={project} />
+                  <ResourceManagement results={calculationResults} project={project} hoursPerDay={hoursPerDay} />
                 ) : (
                   <Card>
                     <CardContent className="text-center py-8">
@@ -953,6 +1405,7 @@ function App() {
                 <WhatIfModeling 
                   originalProject={project}
                   originalResults={calculationResults}
+                  hoursPerDay={hoursPerDay}
                 />
               </TabsContent>
             </Tabs>
@@ -984,6 +1437,9 @@ function App() {
                     tasks={project.tasks}
                     ganttChartRef={ganttChartRef}
                     networkDiagramRef={networkDiagramRef}
+                    ganttExportRef={ganttExportRef}
+                    networkExportRef={networkExportRef}
+                    hoursPerDay={hoursPerDay}
                   />
               </TabsContent>
               
@@ -1009,12 +1465,169 @@ function App() {
           </TabsContent>
         </Tabs>
       </div>
+      <Dialog
+        open={missingDepsDialogOpen}
+        onOpenChange={(open) => {
+          if (isResolvingMissingDeps) return;
+          setMissingDepsDialogOpen(open);
+          if (!open) {
+            setMissingDepsDialogError('');
+            setManualPredecessorSelections(['']);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Найдены отсутствующие предшественники</DialogTitle>
+            <DialogDescription>
+              В проекте есть ссылки на предшественников, которых нет в текущем списке работ.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="rounded-md border bg-muted/30 p-3 text-sm">
+              <div className="font-medium">
+                Шаг {Math.min(currentMissingTaskIndex + 1, Math.max(missingTaskQueue.length, 1))} из {Math.max(missingTaskQueue.length, 1)}
+              </div>
+              {activeMissingTask ? (
+                <div className="mt-1">
+                  Обрабатывается задача: <span className="font-medium">{activeMissingTask.taskId}</span>
+                  {activeMissingTask.taskName ? ` (${activeMissingTask.taskName})` : ''}
+                </div>
+              ) : (
+                <div className="mt-1">Нет активной задачи для обработки.</div>
+              )}
+              <div className="mt-1 text-muted-foreground">
+                Достаточно выбрать хотя бы одного предшественника для задачи.
+              </div>
+              <div className="mt-1 text-muted-foreground">
+                Для выбора доступны только задачи, расположенные раньше текущей. Поля можно добавлять кнопкой "+".
+              </div>
+              <div className="mt-1 text-muted-foreground">
+                Максимум предшественников: {maxManualPredecessors}.
+              </div>
+            </div>
+
+            <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+              {manualPredecessorSelections.map((selectedValue, rowIndex) => (
+                <div key={`manual-pred-${rowIndex}`} className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-2 items-center">
+                  <div className="text-sm font-medium">Предшественник {rowIndex + 1}</div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={selectedValue}
+                      onChange={(e) => {
+                        const nextValue = String(e.target.value || '').trim();
+                        const duplicateInOtherRow = manualPredecessorSelections
+                          .some((value, index) => index !== rowIndex && String(value || '').trim() === nextValue);
+                        if (duplicateInOtherRow) {
+                          setMissingDepsDialogError('Этот предшественник уже выбран в другом поле.');
+                          return;
+                        }
+                        setMissingDepsDialogError('');
+                        setManualPredecessorSelections(prev => {
+                          const next = [...prev];
+                          next[rowIndex] = nextValue;
+                          return next;
+                        });
+                      }}
+                      className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                      disabled={isResolvingMissingDeps}
+                    >
+                      <option value="">Выберите работу из текущего списка</option>
+                      {allowedManualPredecessorOptions
+                        .filter(task => {
+                          const selectedInOtherRows = new Set(
+                            manualPredecessorSelections
+                              .map((value, index) => index === rowIndex ? '' : String(value || '').trim())
+                              .filter(Boolean)
+                          );
+                          return task.id === selectedValue || !selectedInOtherRows.has(task.id);
+                        })
+                        .map(task => (
+                        <option key={`${rowIndex}:${task.id}`} value={task.id}>
+                          {task.id} - {task.name}
+                        </option>
+                      ))}
+                    </select>
+                    {manualPredecessorSelections.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setManualPredecessorSelections(prev => prev.filter((_, i) => i !== rowIndex))
+                        }
+                        disabled={isResolvingMissingDeps}
+                      >
+                        -
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setManualPredecessorSelections(prev => [...prev, ''])}
+                disabled={isResolvingMissingDeps || !canAddManualPredecessor}
+              >
+                + Добавить предшественника
+              </Button>
+              {hasEmptyManualSelection && maxManualPredecessors > 0 && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Новое поле можно добавить только после заполнения текущего.
+                </div>
+              )}
+            </div>
+
+            {missingDepsDialogError && (
+              <Alert className="border-red-200 bg-red-50">
+                <AlertCircle className="h-4 w-4 text-red-600" />
+                <AlertDescription className="text-red-800">
+                  {missingDepsDialogError}
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setMissingDepsDialogOpen(false)}
+              disabled={isResolvingMissingDeps}
+            >
+              Отмена
+            </Button>
+            <Button
+              type="button"
+              onClick={handleApplyManualMappingAndCalculate}
+              disabled={isResolvingMissingDeps || activeMissingIds.length === 0}
+            >
+              Применить для этой задачи
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
        <UserGuide ref={userGuideRef} />
         <GostViewer open={isGostModalOpen} onOpenChange={setGostModalOpen} />
        {calculationResults && (
-  <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', zIndex: -1 }}>
-    <NetworkDiagram ref={networkDiagramRef} results={calculationResults} />
-    <GanttChart ref={ganttChartRef} results={calculationResults} project={project} />
+  <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', zIndex: -1, width: '1600px', background: '#ffffff' }}>
+    <NetworkDiagram
+      ref={networkExportRef}
+      results={calculationResults}
+      hoursPerDay={hoursPerDay}
+    />
+    <GanttChart
+      ref={ganttExportRef}
+      results={calculationResults}
+      project={project}
+      resourceLimit={resourceLimit}
+    />
   </div>
 )}
     </div>

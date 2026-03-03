@@ -17,8 +17,15 @@ import {
   Activity,
   Zap
 } from 'lucide-react';
+import { calcLaborHours } from '../utils/time.js';
 
-const ResourceManagement = ({ results, project }) => {
+function getTaskWorkloadHours(task, hoursPerDay) {
+  const labor = Number(task.laborIntensity);
+  if (Number.isFinite(labor)) return labor;
+  return calcLaborHours(task.duration, task.numberOfPerformers, hoursPerDay);
+}
+
+const ResourceManagement = ({ results, project, hoursPerDay = 8 }) => {
   const [selectedResource, setSelectedResource] = useState(null);
   const [timeFilter, setTimeFilter] = useState('all');
 
@@ -56,7 +63,7 @@ const ResourceManagement = ({ results, project }) => {
       
       resourceAnalysis[resourceKey].totalTasks++;
       resourceAnalysis[resourceKey].totalDuration += task.duration;
-      resourceAnalysis[resourceKey].totalWorkload += task.laborIntensity || task.duration;
+      resourceAnalysis[resourceKey].totalWorkload += getTaskWorkloadHours(task, hoursPerDay);
       if (task.isCritical) {
         resourceAnalysis[resourceKey].criticalTasks++;
       }
@@ -132,7 +139,7 @@ const ResourceManagement = ({ results, project }) => {
         averageUtilization: timelineAnalysis.reduce((sum, t) => sum + t.utilization, 0) / timelineAnalysis.length
       }
     };
-  }, [results]);
+  }, [results, hoursPerDay]);
 
   if (!analysis) {
     return (
@@ -432,4 +439,3 @@ const ResourceManagement = ({ results, project }) => {
 };
 
 export default ResourceManagement;
-

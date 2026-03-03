@@ -1,12 +1,17 @@
 
+import { calcLaborHours } from './time.js';
+
 export class SPUTask {
-  constructor(name, duration, from, to, laborIntensity = 0, numberOfPerformers = 1) {
+  constructor(name, duration, from, to, laborIntensity = 0, numberOfPerformers = 1, hoursPerDay = 8) {
     this.name = name;
-    this.duration = parseFloat(duration);
+    this.duration = parseFloat(duration) || 0;
     this.from = from;
     this.to = to;
-    this.laborIntensity = parseFloat(laborIntensity) || this.duration * 8; 
-    this.numberOfPerformers = parseInt(numberOfPerformers) || 1;
+    this.numberOfPerformers = Math.max(1, parseInt(numberOfPerformers, 10) || 1);
+    const parsedLabor = Number(laborIntensity);
+    this.laborIntensity = Number.isFinite(parsedLabor)
+      ? parsedLabor
+      : calcLaborHours(this.duration, this.numberOfPerformers, hoursPerDay);
     this.ES = 0;
     this.EF = 0; 
     this.LS = 0; 
@@ -45,7 +50,7 @@ export class SPUTask {
 }
 
 export class SPUCalculation {
-  constructor(tasks) {
+  constructor(tasks, { hoursPerDay = 8 } = {}) {
     this.tasks = tasks.map(task => {
       if (task instanceof SPUTask) {
         return task;
@@ -56,7 +61,8 @@ export class SPUCalculation {
         task.id.split("-")[0],
         task.id.split("-")[1],
         task.laborIntensity,
-        task.numberOfPerformers
+        task.numberOfPerformers,
+        hoursPerDay
       );
     });
   }
@@ -64,54 +70,64 @@ export class SPUCalculation {
   calculateEarlyStartAndFinish() {
     const fromTo = [...new Set(this.tasks.flatMap(t => [t.from, t.to]))];
 
-    const incoming = {};
     const outgoing = {};
     
     fromTo.forEach(node => {
-      incoming[node] = [];
       outgoing[node] = [];
     });
 
     this.tasks.forEach(task => {
-      incoming[task.to].push(task);
       outgoing[task.from].push(task);
     });
 
     const sortedNodes = this.sortNodes(fromTo, outgoing);
 
-    const earlyEventTime = {}; 
+    const earlyEventTime = {};
     fromTo.forEach(node => {
       earlyEventTime[node] = 0;
     });
 
     sortedNodes.forEach(node => {
       outgoing[node].forEach(task => {
-        task.ES = earlyEventTime[node]; 
-        task.EF = task.ES + task.duration;
-        earlyEventTime[task.to] = Math.max(earlyEventTime[task.to] || 0, task.EF);
+        const candidateFinish = earlyEventTime[node] + task.duration;
+        earlyEventTime[task.to] = Math.max(earlyEventTime[task.to], candidateFinish);
       });
     });
 
-    const lateEventTime = {}; 
-    const projectDuration = Math.max(...Object.values(earlyEventTime));
-    
+    const projectDuration = Math.max(0, ...Object.values(earlyEventTime));
+    const lateEventTime = {};
+
     fromTo.forEach(node => {
       lateEventTime[node] = projectDuration;
     });
 
     const reversedNodes = [...sortedNodes].reverse();
-    
+
     reversedNodes.forEach(node => {
-      incoming[node].forEach(task => {
-        task.LF = lateEventTime[node]; 
-        task.LS = task.LF - task.duration; 
-        lateEventTime[task.from] = Math.min(lateEventTime[task.from], task.LS); 
-      });
+      if (outgoing[node].length === 0) {
+        lateEventTime[node] = Math.min(lateEventTime[node], projectDuration);
+        return;
+      }
+
+      lateEventTime[node] = Math.min(
+        ...outgoing[node].map(task => lateEventTime[task.to] - task.duration)
+      );
+    });
+
+    const eventReserve = {};
+
+    fromTo.forEach(node => {
+      eventReserve[node] = lateEventTime[node] - earlyEventTime[node];
     });
 
     this.tasks.forEach(task => {
-      task.totalFloat = task.LS - task.ES; 
-      task.freeFloat = earlyEventTime[task.to] - task.EF; 
+      task.ES = earlyEventTime[task.from];
+      task.EF = task.ES + task.duration;
+      task.LF = lateEventTime[task.to];
+      task.LS = task.LF - task.duration;
+
+      task.totalFloat = task.LF - task.ES - task.duration;
+      task.freeFloat = earlyEventTime[task.to] - task.ES - task.duration;
     });
 
     return {
@@ -120,7 +136,8 @@ export class SPUCalculation {
       criticalPath: this.findCriticalPath(),
       nodes: fromTo,
       earlyEventTime,
-      lateEventTime
+      lateEventTime,
+      eventReserve
     };
   }
 
@@ -198,7 +215,7 @@ export class SPUCalculation {
     return path;
   }
 
-  static calculateNetworkParameters(tasks) {
+  static calculateNetworkParameters(tasks, { hoursPerDay = 8 } = {}) {
     try {
       const spuTasks = tasks.map(task => {
         const [from, to] = task.id.split("-");
@@ -208,21 +225,30 @@ export class SPUCalculation {
           from,
           to,
           task.laborIntensity,
-          task.numberOfPerformers
+          task.numberOfPerformers,
+          hoursPerDay
         );
       });
 
-      const calculation = new SPUCalculation(spuTasks);
+      const calculation = new SPUCalculation(spuTasks, { hoursPerDay });
       const result = calculation.calculateEarlyStartAndFinish();
+      const eventTimes = {
+        early: result.earlyEventTime,
+        late: result.lateEventTime,
+        reserve: result.eventReserve
+      };
 
-      const calculatedTasks = result.tasks.map(spuTask => ({
+      const calculatedTasks = result.tasks.map(spuTask => {
+        const sourceTask = tasks.find(t => t.id === spuTask.id);
+        return {
         id: spuTask.id,
         name: spuTask.name,
         duration: spuTask.duration,
         laborIntensity: spuTask.laborIntensity,
         numberOfPerformers: spuTask.numberOfPerformers,
-        predecessors: tasks.find(t => t.id === spuTask.id)?.predecessors || [],
-        isDummy: Boolean(tasks.find(t => t.id === spuTask.id)?.isDummy), // новое
+        predecessors: sourceTask?.predecessors || [],
+        isDummy: Boolean(sourceTask?.isDummy), // новое
+        sourceTaskId: sourceTask?.sourceTaskId ?? null,
         earlyStart: spuTask.ES,
         earlyFinish: spuTask.EF,
         lateStart: spuTask.LS,
@@ -233,13 +259,17 @@ export class SPUCalculation {
         earlyEventTimeI: result.earlyEventTime[spuTask.from], 
         earlyEventTimeJ: result.earlyEventTime[spuTask.to], 
         lateEventTimeI: result.lateEventTime[spuTask.from], 
-        lateEventTimeJ: result.lateEventTime[spuTask.to] 
-      }));
+        lateEventTimeJ: result.lateEventTime[spuTask.to],
+        eventReserveJ: result.eventReserve[spuTask.to]
+      };
+    });
+
 
       return {
         tasks: calculatedTasks,
         projectDuration: result.projectDuration,
         criticalPath: result.criticalPath,
+        eventTimes,
         isValid: true,
         errors: []
       };
@@ -255,7 +285,7 @@ export class SPUCalculation {
     }
   }
 
-  static validateNetwork(tasks) {
+  static validateNetwork(tasks, { hoursPerDay = 8 } = {}) {
     const errors = [];
     
     if (!Array.isArray(tasks) || tasks.length === 0) { 
@@ -281,7 +311,7 @@ export class SPUCalculation {
           errors.push(`Некорректная продолжительность (ожидалось 0) для фиктивной задачи: ${task.id}`);
         }
       } else {
-        if (!Number.isFinite(dur) || dur < 1) {
+        if (!Number.isFinite(dur) || dur < 0.1) {
           errors.push(`Некорректная продолжительность для задачи: ${task.id}`);
         }
       }
@@ -302,10 +332,11 @@ export class SPUCalculation {
           from,
           to,
           task.laborIntensity, 
-          task.numberOfPerformers 
+          task.numberOfPerformers,
+          hoursPerDay
         );
       });
-      const calculation = new SPUCalculation(spuTasks);
+      const calculation = new SPUCalculation(spuTasks, { hoursPerDay });
       calculation.calculateEarlyStartAndFinish();
     } catch (error) {
       errors.push(error.message);
@@ -320,4 +351,3 @@ export class SPUCalculation {
 
 export const calculateNetworkParameters = SPUCalculation.calculateNetworkParameters;
 export const validateNetwork = SPUCalculation.validateNetwork;
-
