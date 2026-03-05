@@ -36,6 +36,12 @@ const formatDisplayNumber = (num) => {
   return number.toFixed(2);
 };
 
+const formatPerformers = (value) => {
+  const number = parseInt(value, 10);
+  if (!Number.isFinite(number) || number <= 0) return 1;
+  return number;
+};
+
 const CalculationResults = ({ results, project }) => {
   const [selectedTask, setSelectedTask] = useState(null);
 
@@ -87,7 +93,7 @@ const CalculationResults = ({ results, project }) => {
           `"${task.name}"`,
           task.duration,
           task.laborIntensity || 0,
-          task.numberOfPerformers,
+          formatPerformers(task.numberOfPerformers),
           `"${(task.predecessors || []).join(', ')}"`,
           formatNumberForCSV(task.earlyEventTimeI ?? task.earlyStart),
           formatNumberForCSV(task.earlyFinish),
@@ -98,7 +104,7 @@ const CalculationResults = ({ results, project }) => {
           formatNumberForCSV(task.eventReserveJ),
           formatNumberForCSV(task.totalFloat),
           formatNumberForCSV(task.freeFloat),
-          (!task.isDummy && task.isCritical) ? 'Да' : 'Нет'
+          task.isCritical ? 'Да' : 'Нет'
         ].join(';');
       })
     ].join('\n');
@@ -213,7 +219,7 @@ const CalculationResults = ({ results, project }) => {
               <CardTitle className="flex items-center justify-between">
                 <span className="flex items-center gap-2">
                   <FileSpreadsheet className="h-5 w-5" />
-                  Параметры сетевого графика
+                  Таблица 6.1.2 - Расчётные параметры работ сетевого графика
                 </span>
                 <Button onClick={exportToCSV} size="sm" variant="outline">
                   <Download className="h-4 w-4 mr-2" />
@@ -275,7 +281,7 @@ const CalculationResults = ({ results, project }) => {
                   </thead>
                   <tbody>
                     {results.tasks.map((task, index) => {
-                      const isCriticalVisual = !task.isDummy && task.isCritical; 
+                      const isCriticalVisual = Boolean(task.isCritical);
                       return (
                         <tr
                           key={task.id}
@@ -297,7 +303,7 @@ const CalculationResults = ({ results, project }) => {
                             {task.laborIntensity ?? task.duration}
                           </td>
                           <td className="border border-gray-300 px-3 py-2 text-center">
-                            {task.numberOfPerformers}
+                            {formatPerformers(task.numberOfPerformers)}
                           </td>
                           <td className="border border-gray-300 px-3 py-2 text-center">
                             {formatDisplayNumber(task.earlyEventTimeI ?? task.earlyStart)}
@@ -360,10 +366,12 @@ const CalculationResults = ({ results, project }) => {
                           <p>Резерв времени последующего события: {task.eventReserveJ > 0.001 ? `${task.eventReserveJ.toFixed(2)} дней` : 'отсутствует'}</p>
                           <p>Статус: 
                             {(() => { 
-                              const isCriticalVisual = !task.isDummy && task.isCritical;
+                              const isCriticalVisual = Boolean(task.isCritical);
                               return (
                                 <p>
-                                  Статус: {task.isDummy ? 'фиктивная работа' : (isCriticalVisual ? 'критическая работа' : 'некритическая работа')}
+                                  Статус: {task.isDummy
+                                    ? (isCriticalVisual ? 'фиктивная критическая работа' : 'фиктивная работа')
+                                    : (isCriticalVisual ? 'критическая работа' : 'некритическая работа')}
                                 </p>
                               );
                             })()}

@@ -22,6 +22,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+const EDGE_ID_PATTERN = /^\d+-\d+$/;
+const NUMERIC_ID_PATTERN = /^\d+$/;
+
+const parseEdgeNodes = (edgeId) => {
+  const value = String(edgeId ?? '').trim();
+  const match = value.match(/^(\d+)-(\d+)$/);
+  if (!match) return null;
+  return { from: match[1], to: match[2] };
+};
+
 
 
 const TaskInput = ({
@@ -72,6 +82,39 @@ const TaskInput = ({
       .map(task => String(task?.id ?? '').trim())
       .filter(Boolean)
   );
+
+  const detectTaskIdKind = (value) => {
+    const id = String(value ?? '').trim();
+    if (!id) return 'empty';
+    if (EDGE_ID_PATTERN.test(id)) return 'edge';
+    if (NUMERIC_ID_PATTERN.test(id)) return 'numeric';
+    return 'invalid';
+  };
+
+  const getTaskListIdMode = (tasksList) => {
+    let hasEdge = false;
+    let hasNumeric = false;
+    const invalidIds = [];
+
+    (Array.isArray(tasksList) ? tasksList : []).forEach((task) => {
+      const id = String(task?.id ?? '').trim();
+      const kind = detectTaskIdKind(id);
+      if (kind === 'edge') hasEdge = true;
+      else if (kind === 'numeric') hasNumeric = true;
+      else if (kind === 'invalid') invalidIds.push(id);
+    });
+
+    if (invalidIds.length > 0) {
+      return { mode: 'invalid', invalidIds: Array.from(new Set(invalidIds)) };
+    }
+    if (hasEdge && hasNumeric) return { mode: 'mixed', invalidIds: [] };
+    if (hasEdge) return { mode: 'edge', invalidIds: [] };
+    if (hasNumeric) return { mode: 'numeric', invalidIds: [] };
+    return { mode: 'empty', invalidIds: [] };
+  };
+
+  const taskListIdModeInfo = getTaskListIdMode(tasks);
+  const isPostCalculationMode = Boolean(showCalculatedEdgeIds);
   const currentTaskId = String(formData.id || '').trim();
   const editingTaskIndex = editingTask
     ? tasks.findIndex(task => String(task?.id) === String(editingTask.id))
@@ -250,6 +293,34 @@ const TaskInput = ({
       return;
     }
 
+    const enteredTaskId = editingTask
+      ? String(editingTask?.id ?? '').trim()
+      : String(formData.id ?? '').trim();
+    const enteredTaskIdKind = detectTaskIdKind(enteredTaskId);
+    if (enteredTaskIdKind === 'invalid') {
+      setFormError('ID работы должен быть в формате "N" или "N-M" (например, "3" или "1-2").');
+      return;
+    }
+    if (!editingTask && !isPostCalculationMode && taskListIdModeInfo.mode === 'mixed') {
+      setFormError('В проекте уже смешаны форматы ID. Приведите все ID к одному формату перед добавлением новых работ.');
+      return;
+    }
+    if (!editingTask && !isPostCalculationMode && taskListIdModeInfo.mode === 'invalid') {
+      setFormError(`Обнаружены некорректные ID: ${taskListIdModeInfo.invalidIds.join(', ')}`);
+      return;
+    }
+    if (
+      !editingTask &&
+      !isPostCalculationMode &&
+      taskListIdModeInfo.mode !== 'empty' &&
+      taskListIdModeInfo.mode !== enteredTaskIdKind
+    ) {
+      setFormError(
+        `До первого расчета смешение форматов ID запрещено. Сейчас используются "${taskListIdModeInfo.mode === 'edge' ? 'N-M' : 'N'}", а введен "${enteredTaskIdKind === 'edge' ? 'N-M' : 'N'}".`
+      );
+      return;
+    }
+
     const laborHours = parseFloat(formData.laborIntensity);
     if (!Number.isFinite(laborHours) || laborHours <= 0) {
       setFormError('Трудоемкость должна быть больше 0');
@@ -287,10 +358,52 @@ const TaskInput = ({
       setFormError(`Можно указать не более ${MAX_PREDECESSORS} предшественников.`);
       return;
     }
+    if (enteredTaskIdKind === 'edge' && predecessors.length > 0) {
+      const currentEdgeNodes = parseEdgeNodes(enteredTaskId);
+      if (!currentEdgeNodes) {
+        setFormError('Некорректный формат ID дуги.');
+        return;
+      }
+
+      const unresolvedPreds = [];
+      const inconsistentPreds = [];
+
+      predecessors.forEach((predId) => {
+        const predKind = detectTaskIdKind(predId);
+        const predEdgeId = predKind === 'edge'
+          ? predId
+          : String(calculatedEdgeIdByTaskId?.[predId] ?? '').trim();
+        const predEdgeNodes = parseEdgeNodes(predEdgeId);
+
+        if (!predEdgeNodes) {
+          unresolvedPreds.push(predId);
+          return;
+        }
+        if (predEdgeNodes.to !== currentEdgeNodes.from) {
+          inconsistentPreds.push(`${predId} (${predEdgeId})`);
+        }
+      });
+
+      if (unresolvedPreds.length > 0) {
+        setFormError(
+          `Для дуги ${enteredTaskId} не удалось сопоставить предшественники с форматом N-M: ${unresolvedPreds.join(', ')}. ` +
+          'Используйте предшественники в формате N-M или сначала выполните расчет.'
+        );
+        return;
+      }
+
+      if (inconsistentPreds.length > 0) {
+        setFormError(
+          `Для дуги ${enteredTaskId} каждый предшественник должен оканчиваться в узле ${currentEdgeNodes.from}. ` +
+          `Некорректно: ${inconsistentPreds.join(', ')}`
+        );
+        return;
+      }
+    }
 
     const newTask = {
       ...createTask(
-      formData.id,
+      enteredTaskId,
       formData.name,
       calculatedDuration,
       laborHours,
@@ -302,12 +415,12 @@ const TaskInput = ({
 
     if (editingTask) {
       const updatedTasks = tasks.map(task =>
-        task.id === editingTask.id ? newTask : task
+        String(task?.id ?? '').trim() === enteredTaskId ? newTask : task
       );
       onTasksChange(updatedTasks);
       setEditingTask(null);
     } else {
-      const newTaskIdNum = toNaturalInt(formData.id);
+      const newTaskIdNum = toNaturalInt(enteredTaskId);
 
       if (Number.isInteger(newTaskIdNum)) {
         const shiftedTasks = shiftTaskIdsForInsertion(tasks, newTaskIdNum);
@@ -323,7 +436,7 @@ const TaskInput = ({
         }
         onTasksChange(nextTasks);
       } else {
-        if (tasks.some(task => String(task?.id) === String(formData.id))) {
+        if (tasks.some(task => String(task?.id ?? '').trim() === enteredTaskId)) {
           setFormError('Работа с таким ID уже существует');
           return;
         }
@@ -407,7 +520,7 @@ const TaskInput = ({
           <CardTitle>Список работ ({tasks.length})</CardTitle>
           
           <div className="flex min-h-[28px] items-center gap-2 text-sm">
-            <span className="text-muted-foreground">Пиковая загрузка:</span>
+            <span className="text-muted-foreground">Макс. исполнителей на одну работу:</span>
 
             {resourceLimit === Infinity ? (
 
@@ -584,6 +697,22 @@ const TaskInput = ({
                 placeholder="1-2"
                 disabled={editingTask !== null}
               />
+              <p className="text-xs text-muted-foreground">
+                {isPostCalculationMode
+                  ? 'После расчета можно добавлять ID в форматах "N" и "N-M".'
+                  : `До первого расчета используйте один формат ID: ${
+                      taskListIdModeInfo.mode === 'numeric'
+                        ? 'только "N" (например, 3)'
+                        : taskListIdModeInfo.mode === 'edge'
+                          ? 'только "N-M" (например, 1-2)'
+                          : '"N" или "N-M", но далее придерживайтесь выбранного формата'
+                    }.`}
+              </p>
+              {!isPostCalculationMode && taskListIdModeInfo.mode === 'mixed' && (
+                <p className="text-xs text-red-600">
+                  Внимание: в списке уже смешаны форматы ID. Расчет будет заблокирован до исправления.
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -688,7 +817,9 @@ const TaskInput = ({
                 value={formData.duration}
                 placeholder="10"
                 readOnly
-                disabled={!isTaskIdentityReady}
+                disabled
+                tabIndex={-1}
+                className="pointer-events-none"
                 title="Рассчитывается автоматически из трудоемкости, исполнителей и длительности рабочего дня"
               />
             </div>

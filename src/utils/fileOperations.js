@@ -7,6 +7,12 @@ const formatExportNumber = (value) => {
   return number.toFixed(2);
 };
 
+const formatPerformers = (value) => {
+  const number = parseInt(value, 10);
+  if (!Number.isFinite(number) || number <= 0) return 1;
+  return number;
+};
+
 export const exportProjectToJSON = (project, calculationResults = null) => {
   try {
     const exportData = {
@@ -69,7 +75,7 @@ export const exportResultsToCSV = (tasks) => {
         `"${task.name}"`,
         task.duration,
         task.laborIntensity,
-        task.numberOfPerformers,
+        formatPerformers(task.numberOfPerformers),
         `"${task.predecessors.join(', ')}"`,
         formatExportNumber(task.earlyEventTimeI ?? task.earlyStart),
         formatExportNumber(task.earlyFinish),
@@ -137,7 +143,7 @@ export const exportResultsToExcel = (tasks, projectInfo) => {
         task.name,
         task.duration,
         task.laborIntensity,
-        task.numberOfPerformers,
+        formatPerformers(task.numberOfPerformers),
         task.predecessors.join(', '),
         formatExportNumber(task.earlyEventTimeI ?? task.earlyStart),
         formatExportNumber(task.earlyFinish),
@@ -412,4 +418,3 @@ export const saveLogsToFile = () => {
     throw error;
   }
 };
-

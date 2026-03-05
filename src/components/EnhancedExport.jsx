@@ -27,6 +27,12 @@ const formatNumberForCSV = (num) => {
   return '0,00';
 };
 
+const formatPerformers = (value) => {
+  const number = parseInt(value, 10);
+  if (!Number.isFinite(number) || number <= 0) return 1;
+  return number;
+};
+
 const EnhancedExport = ({
   results,
   project,
@@ -162,7 +168,7 @@ const EnhancedExport = ({
       ...(results?.tasks || []).map((task, index) => {
         const taskIdAsFormula = `="${task.id}"`;
         return [
-          index + 1, taskIdAsFormula, `"${task.name}"`, task.duration, task.numberOfPerformers,
+          index + 1, taskIdAsFormula, `"${task.name}"`, task.duration, formatPerformers(task.numberOfPerformers),
           task.laborIntensity || 0,
           formatNumberForCSV(task.earlyEventTimeI ?? task.earlyStart),
           formatNumberForCSV(task.earlyFinish),
@@ -173,7 +179,7 @@ const EnhancedExport = ({
           formatNumberForCSV(task.eventReserveJ),
           formatNumberForCSV(task.totalFloat),
           formatNumberForCSV(task.freeFloat),
-          (!task.isDummy && task.isCritical) ? 'Да' : 'Нет'
+          task.isCritical ? 'Да' : 'Нет'
         ].join(';');
       })
     ].join('\n');

@@ -1,5 +1,10 @@
 import { Document, Packer, Paragraph, Table as DocxTable, TableRow, TableCell, WidthType, AlignmentType, TextRun, HeadingLevel } from 'docx';
 
+const formatPerformers = (value) => {
+  const number = parseInt(value, 10);
+  if (!Number.isFinite(number) || number <= 0) return '1';
+  return String(number);
+};
 
 export const exportToWord = async (tasks, results) => {
   try {
@@ -84,7 +89,7 @@ export const exportToWord = async (tasks, results) => {
               task.id,
               task.name,
               task.duration.toString(),
-              task.numberOfPerformers.toString(),
+              formatPerformers(task.numberOfPerformers),
               task.isCritical ? 'Да' : 'Нет',
             ].map(value => new TableCell({
               children: [new Paragraph({ text: value, alignment: AlignmentType.CENTER })],

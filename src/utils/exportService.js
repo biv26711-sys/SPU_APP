@@ -31,6 +31,54 @@ const formatReportNumber = (value) => {
   return number.toFixed(2);
 };
 
+const formatPerformers = (value) => {
+  const number = parseInt(value, 10);
+  if (!Number.isFinite(number) || number <= 0) return '1';
+  return String(number);
+};
+
+const EDGE_ID_PATTERN = /^\d+-\d+$/;
+
+const asDisplayText = (value) => {
+  const text = String(value ?? '').trim();
+  return text || '—';
+};
+
+const buildEdgeIdByTaskIdMap = (results) => {
+  const map = {};
+  const rows = Array.isArray(results?.tasks) ? results.tasks : [];
+
+  rows.forEach((task) => {
+    if (!task || task.isDummy === true) return;
+    const edgeId = String(task.id ?? '').trim();
+    if (!edgeId) return;
+    const taskId = String(task.sourceTaskId ?? edgeId).trim();
+    if (!taskId) return;
+    map[taskId] = edgeId;
+  });
+
+  return map;
+};
+
+const resolveInputTaskIds = (task, edgeIdByTaskId) => {
+  const taskId = String(task?.id ?? '').trim();
+  const edgeId = String(edgeIdByTaskId?.[taskId] ?? '').trim()
+    || (EDGE_ID_PATTERN.test(taskId) ? taskId : '');
+  return {
+    taskId: asDisplayText(taskId),
+    edgeId: asDisplayText(edgeId),
+  };
+};
+
+const resolveResultTaskIds = (task) => {
+  const edgeId = String(task?.id ?? '').trim();
+  const taskId = String(task?.sourceTaskId ?? edgeId).trim();
+  return {
+    taskId: asDisplayText(taskId),
+    edgeId: asDisplayText(edgeId),
+  };
+};
+
 const PORTRAIT_A4_SIZE = {
   width: 11906,
   height: 16838,
@@ -73,19 +121,21 @@ const fitImageToBox = (width, height, maxWidth, maxHeight) => {
   };
 };
 
-const createTaskListTable = (tasks) => {
-  const tableHeaders = ["ID", "Наименование", "Длительность (дн.)", "Трудоемкость (н-ч)", "Исполнители", "Предшественники"];
+const createTaskListTable = (tasks, edgeIdByTaskId = {}) => {
+  const tableHeaders = ["ID задачи", "ID дуги", "Наименование", "Длительность (дн.)", "Трудоемкость (н-ч)", "Исполнители", "Предшественники"];
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: [
       new TableRow({ children: tableHeaders.map(text => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text, bold: true })] })] })), tableHeader: true }),
       ...tasks.map(task => {
+        const { taskId, edgeId } = resolveInputTaskIds(task, edgeIdByTaskId);
         const rowData = [
-          task.id,
+          taskId,
+          edgeId,
           task.name,
           task.duration.toString(),
           (task.laborIntensity || 0).toString(),
-          task.numberOfPerformers.toString(),
+          formatPerformers(task.numberOfPerformers),
           Array.isArray(task.predecessors) ? task.predecessors.join(', ') : (task.predecessors || ''),
         ];
         return new TableRow({
@@ -97,14 +147,15 @@ const createTaskListTable = (tasks) => {
 };
 
 const createReportTable = (results) => {
-  const tableHeaders = ["ID", "Наименование", "Длит.", "Трудоем.", "Исп.", "Tр i", "Ран. ок.", "Tр j", "Позд. нач.", "Tп i", "Tп j", "R j", "Полн. рез.", "Част. рез.", "Крит."];
+  const tableHeaders = ["ID задачи", "ID дуги", "Наименование", "Длит.", "Трудоем.", "Исп.", "Tр i", "Ран. ок.", "Tр j", "Позд. нач.", "Tп i", "Tп j", "R j", "Полн. рез.", "Част. рез.", "Крит."];
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: [
       new TableRow({ children: tableHeaders.map(text => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text, bold: true })], alignment: AlignmentType.CENTER })] })), tableHeader: true }),
       ...results.tasks.map(task => {
+        const { taskId, edgeId } = resolveResultTaskIds(task);
         const rowData = [
-          task.id, task.name, task.duration.toString(), (task.laborIntensity || 0).toString(), task.numberOfPerformers.toString(),
+          taskId, edgeId, task.name, task.duration.toString(), (task.laborIntensity || 0).toString(), formatPerformers(task.numberOfPerformers),
           formatReportNumber(task.earlyEventTimeI ?? task.earlyStart),
           formatReportNumber(task.earlyFinish),
           formatReportNumber(task.earlyEventTimeJ),
@@ -114,7 +165,7 @@ const createReportTable = (results) => {
           formatReportNumber(task.eventReserveJ),
           formatReportNumber(task.totalFloat),
           formatReportNumber(task.freeFloat),
-          (!task.isDummy && task.isCritical) ? 'Да' : 'Нет',
+          task.isCritical ? 'Да' : 'Нет',
         ];
         return new TableRow({
           children: rowData.map(value => new TableCell({ children: [new Paragraph({ children: [new TextRun(String(value ?? ''))], alignment: AlignmentType.CENTER })] }))
@@ -192,14 +243,15 @@ export const generateAndSaveWordReport = async ({ baseline, optimized }) => {
 
     const createTablesForSection = (planData, title, targetArray) => {
         if (!planData || !planData.tasks || !planData.results) return;
+        const edgeIdByTaskId = buildEdgeIdByTaskIdMap(planData.results);
         targetArray.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_1 }));
         targetArray.push(new Paragraph({
           children: [new TextRun({ text: "Таблица 1. Исходные данные (список работ)", bold: true })],
         }));
-        targetArray.push(createTaskListTable(planData.tasks));
+        targetArray.push(createTaskListTable(planData.tasks, edgeIdByTaskId));
         targetArray.push(new Paragraph(""));
         targetArray.push(new Paragraph({
-          children: [new TextRun({ text: "Таблица 2. Ведомость рассчитанных параметров работ (таблица 6.1.2)", bold: true })],
+          children: [new TextRun({ text: "Таблица 6.1.2 - Расчётные параметры работ сетевого графика", bold: true })],
         }));
         targetArray.push(createReportTable(planData.results));
     };
@@ -308,4 +360,3 @@ export const generateAndSaveWordReport = async ({ baseline, optimized }) => {
     alert(`Произошла ошибка при экспорте: ${error.message}`);
   }
 };
-

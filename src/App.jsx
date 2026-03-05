@@ -56,6 +56,161 @@ import logger from './utils/logger';
 import useAutosave from './hooks/useAutosave';
 import './App.css';
 
+const EDGE_ID_PATTERN = /^\d+-\d+$/;
+const NUMERIC_ID_PATTERN = /^\d+$/;
+
+const parseEdgeNodes = (edgeId) => {
+  const value = String(edgeId ?? '').trim();
+  const match = value.match(/^(\d+)-(\d+)$/);
+  if (!match) return null;
+  return { from: match[1], to: match[2] };
+};
+
+const getTaskIdKind = (value) => {
+  const id = String(value ?? '').trim();
+  if (!id) return 'empty';
+  if (EDGE_ID_PATTERN.test(id)) return 'edge';
+  if (NUMERIC_ID_PATTERN.test(id)) return 'numeric';
+  return 'invalid';
+};
+
+const analyzeTaskIdKinds = (tasks) => {
+  let hasEdge = false;
+  let hasNumeric = false;
+  const invalidIds = [];
+
+  (Array.isArray(tasks) ? tasks : []).forEach((task) => {
+    const id = String(task?.id ?? '').trim();
+    const kind = getTaskIdKind(id);
+    if (kind === 'edge') {
+      hasEdge = true;
+    } else if (kind === 'numeric') {
+      hasNumeric = true;
+    } else if (kind === 'invalid') {
+      invalidIds.push(id);
+    }
+  });
+
+  if (invalidIds.length > 0) {
+    return { mode: 'invalid', invalidIds: Array.from(new Set(invalidIds)) };
+  }
+  if (hasEdge && hasNumeric) {
+    return { mode: 'mixed', invalidIds: [] };
+  }
+  if (hasEdge) {
+    return { mode: 'edge', invalidIds: [] };
+  }
+  if (hasNumeric) {
+    return { mode: 'numeric', invalidIds: [] };
+  }
+  return { mode: 'empty', invalidIds: [] };
+};
+
+const buildTasksForCalculation = (tasks, { hoursPerDay = 8 } = {}) => {
+  const source = Array.isArray(tasks) ? tasks : [];
+  const edgeTasks = [];
+  const numericTasks = [];
+
+  source.forEach((task) => {
+    const id = String(task?.id ?? '').trim();
+    const kind = getTaskIdKind(id);
+    if (kind === 'edge') {
+      edgeTasks.push({ ...task, id });
+    } else if (kind === 'numeric') {
+      numericTasks.push({ ...task, id });
+    }
+  });
+
+  if (numericTasks.length === 0) {
+    return { tasks: edgeTasks, mode: 'edge', duplicateIds: [] };
+  }
+
+  const convertedNumericTasks = aonToAoa(numericTasks, { hoursPerDay, createSink: true });
+  if (edgeTasks.length === 0) {
+    return { tasks: convertedNumericTasks, mode: 'numeric', duplicateIds: [] };
+  }
+
+  const mergedTasks = [...edgeTasks, ...convertedNumericTasks];
+  const seen = new Set();
+  const duplicateIds = [];
+
+  mergedTasks.forEach((task) => {
+    const id = String(task?.id ?? '').trim();
+    if (!id) return;
+    if (seen.has(id)) {
+      duplicateIds.push(id);
+      return;
+    }
+    seen.add(id);
+  });
+
+  return {
+    tasks: mergedTasks,
+    mode: 'mixed',
+    duplicateIds: Array.from(new Set(duplicateIds)),
+  };
+};
+
+const buildResolvedEdgeBySourceId = (sourceTasks, tasksForCalc) => {
+  const map = new Map();
+
+  (Array.isArray(sourceTasks) ? sourceTasks : []).forEach((task) => {
+    const sourceId = String(task?.id ?? '').trim();
+    if (!sourceId) return;
+    if (getTaskIdKind(sourceId) === 'edge') {
+      map.set(sourceId, sourceId);
+    }
+  });
+
+  (Array.isArray(tasksForCalc) ? tasksForCalc : []).forEach((task) => {
+    const edgeId = String(task?.id ?? '').trim();
+    if (!edgeId || getTaskIdKind(edgeId) !== 'edge') return;
+    const sourceTaskId = String(task?.sourceTaskId ?? '').trim();
+    if (sourceTaskId) {
+      map.set(sourceTaskId, edgeId);
+    }
+  });
+
+  return map;
+};
+
+const validateEdgePredecessorBinding = (sourceTasks, edgeBySourceId, normalizePredecessors) => {
+  const errors = [];
+
+  (Array.isArray(sourceTasks) ? sourceTasks : []).forEach((task) => {
+    const taskId = String(task?.id ?? '').trim();
+    if (getTaskIdKind(taskId) !== 'edge') return;
+
+    const currentEdgeNodes = parseEdgeNodes(taskId);
+    if (!currentEdgeNodes) return;
+
+    const predecessors = normalizePredecessors(task);
+    predecessors.forEach((predIdRaw) => {
+      const predId = String(predIdRaw ?? '').trim();
+      if (!predId) return;
+
+      const predEdgeId = getTaskIdKind(predId) === 'edge'
+        ? predId
+        : String(edgeBySourceId.get(predId) ?? '').trim();
+      const predEdgeNodes = parseEdgeNodes(predEdgeId);
+
+      if (!predEdgeNodes) {
+        errors.push(
+          `Для дуги ${taskId} не удалось сопоставить предшественник ${predId} с форматом N-M.`
+        );
+        return;
+      }
+      if (predEdgeNodes.to !== currentEdgeNodes.from) {
+        errors.push(
+          `Для дуги ${taskId} предшественник ${predId} (${predEdgeId}) должен оканчиваться в узле ${currentEdgeNodes.from}.`
+        );
+      }
+    });
+  });
+
+  return Array.from(new Set(errors));
+};
+
 function App() {
   const [project, setProject] = useState({
     id: 'project_' + Date.now(),
@@ -775,6 +930,21 @@ function App() {
   setValidationErrors([]);
 
   const sourceTasks = Array.isArray(tasksOverride) ? tasksOverride : (Array.isArray(project.tasks) ? project.tasks : []);
+  const idKindInfo = analyzeTaskIdKinds(sourceTasks);
+  if (idKindInfo.mode === 'invalid') {
+    const errors = [
+      `Некорректные ID работ: ${idKindInfo.invalidIds.join(', ')}`,
+      'Допустимы только форматы "N" (например, 3) или "N-M" (например, 1-2).',
+    ];
+    setValidationErrors(errors);
+    logger.logCalculationError(new Error('Invalid task ID format'), {
+      errors,
+      tasksCount: sourceTasks.length,
+      projectId: project.id,
+    });
+    setActiveTab('input');
+    return;
+  }
   if (!skipMissingDependencyCheck) {
     const missingInfo = getMissingPredecessorInfo(sourceTasks);
     if (missingInfo.missingIds.length > 0) {
@@ -802,10 +972,40 @@ function App() {
       projectId: project.id
     });
 
-    const needsAdapt = sourceTasks.some(t => !looksLikeEdgeId(String(t.id)));
-    const tasksForCalc = needsAdapt
-      ? aonToAoa(sourceTasks, { hoursPerDay, createSink: true })
-      : sourceTasks;
+    const calcInput = buildTasksForCalculation(sourceTasks, { hoursPerDay });
+    if (calcInput.duplicateIds.length > 0) {
+      const errors = [
+        `После адаптации обнаружены дубли ID дуг: ${calcInput.duplicateIds.join(', ')}`,
+        'Измените конфликтующие ID (обычно это ручные дуги, совпавшие с автосгенерированными).',
+      ];
+      setValidationErrors(errors);
+      logger.logCalculationError(new Error('Duplicate edge IDs after adaptation'), {
+        errors,
+        tasksCount: sourceTasks.length,
+        projectId: project.id,
+      });
+      setActiveTab('input');
+      return;
+    }
+
+    const tasksForCalc = calcInput.tasks;
+    const edgeBySourceId = buildResolvedEdgeBySourceId(sourceTasks, tasksForCalc);
+    const edgeBindingErrors = validateEdgePredecessorBinding(
+      sourceTasks,
+      edgeBySourceId,
+      normalizePredecessors
+    );
+    if (edgeBindingErrors.length > 0) {
+      setValidationErrors(edgeBindingErrors);
+      logger.logCalculationError(new Error('Edge predecessor binding validation failed'), {
+        errors: edgeBindingErrors,
+        tasksCount: sourceTasks.length,
+        projectId: project.id,
+      });
+      setActiveTab('input');
+      return;
+    }
+
     const normalizedTasks = tasksForCalc.map(t => {
       const p = Math.max(1, parseInt(t.numberOfPerformers, 10) || 1);
       const isDummy = t.isDummy === true || Number(t.duration) === 0;
