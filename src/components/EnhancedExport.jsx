@@ -29,7 +29,7 @@ const formatNumberForCSV = (num) => {
 
 const formatPerformers = (value) => {
   const number = parseInt(value, 10);
-  if (!Number.isFinite(number) || number <= 0) return 1;
+  if (!Number.isFinite(number) || number < 0) return 0;
   return number;
 };
 
@@ -138,7 +138,7 @@ const EnhancedExport = ({
       <ID>${index + 1}</ID>
       <Name>${task.name}</Name>
       <Duration>PT${task.duration * hoursPerDay}H0M0S</Duration>
-      <Work>PT${(task.laborIntensity || (task.duration * hoursPerDay * (task.numberOfPerformers || 1)))}H0M0S</Work>
+      <Work>PT${(Number.isFinite(Number(task.laborIntensity)) ? Number(task.laborIntensity) : (task.duration * hoursPerDay * Math.max(Number(task.numberOfPerformers) || 0, 1)))}H0M0S</Work>
       <Start>${new Date().toISOString()}</Start>
       <Finish>${new Date(Date.now() + task.duration * 24 * 60 * 60 * 1000).toISOString()}</Finish>
       <Critical>${task.isCritical ? '1' : '0'}</Critical>

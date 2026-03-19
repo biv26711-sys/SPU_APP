@@ -106,35 +106,68 @@ const analyzeTaskIdKinds = (tasks) => {
   return { mode: 'empty', invalidIds: [] };
 };
 
-const buildTasksForCalculation = (tasks, { hoursPerDay = 8 } = {}) => {
-  const source = Array.isArray(tasks) ? tasks : [];
-  const edgeTasks = [];
-  const numericTasks = [];
+const PROJECT_MODES = {
+  AUTO_AOA: 'auto_aoa',
+  MANUAL_AOA: 'manual_aoa',
+};
 
-  source.forEach((task) => {
-    const id = String(task?.id ?? '').trim();
-    const kind = getTaskIdKind(id);
-    if (kind === 'edge') {
-      edgeTasks.push({ ...task, id });
-    } else if (kind === 'numeric') {
-      numericTasks.push({ ...task, id });
-    }
-  });
+const isKnownProjectMode = (value) =>
+  value === PROJECT_MODES.AUTO_AOA || value === PROJECT_MODES.MANUAL_AOA;
 
-  if (numericTasks.length === 0) {
-    return { tasks: edgeTasks, mode: 'edge', duplicateIds: [] };
+const createDefaultProjectState = () => ({
+  id: 'project_' + Date.now(),
+  name: 'Новый проект',
+  startDate: new Date().toISOString().split('T')[0],
+  tasks: [],
+  criticalPath: [],
+  projectDuration: 0,
+  mode: PROJECT_MODES.AUTO_AOA,
+  autoModeUnlocked: false,
+});
+
+const inferProjectModeFromTasks = (tasks) => {
+  const idKindInfo = analyzeTaskIdKinds(tasks);
+
+  if (idKindInfo.mode === 'edge') {
+    return PROJECT_MODES.MANUAL_AOA;
   }
 
-  const convertedNumericTasks = aonToAoa(numericTasks, { hoursPerDay, createSink: true });
-  if (edgeTasks.length === 0) {
-    return { tasks: convertedNumericTasks, mode: 'numeric', duplicateIds: [] };
-  }
+  return PROJECT_MODES.AUTO_AOA;
+};
 
-  const mergedTasks = [...edgeTasks, ...convertedNumericTasks];
+const normalizeProjectState = (projectLike = {}, { hasCalculationResults = false } = {}) => {
+  const defaults = createDefaultProjectState();
+  const tasks = Array.isArray(projectLike?.tasks) ? projectLike.tasks : [];
+  const criticalPath = Array.isArray(projectLike?.criticalPath) ? projectLike.criticalPath : [];
+  const inferredMode = inferProjectModeFromTasks(tasks);
+  const mode = isKnownProjectMode(projectLike?.mode) ? projectLike.mode : inferredMode;
+  const idKindInfo = analyzeTaskIdKinds(tasks);
+  const autoModeUnlocked = mode === PROJECT_MODES.AUTO_AOA
+    ? (
+        typeof projectLike?.autoModeUnlocked === 'boolean'
+          ? projectLike.autoModeUnlocked
+          : hasCalculationResults || idKindInfo.mode === 'mixed'
+      )
+    : false;
+
+  return {
+    ...defaults,
+    ...projectLike,
+    tasks,
+    criticalPath,
+    projectDuration: Number.isFinite(Number(projectLike?.projectDuration))
+      ? Number(projectLike.projectDuration)
+      : defaults.projectDuration,
+    mode,
+    autoModeUnlocked,
+  };
+};
+
+const collectDuplicateTaskIds = (tasks) => {
   const seen = new Set();
   const duplicateIds = [];
 
-  mergedTasks.forEach((task) => {
+  (Array.isArray(tasks) ? tasks : []).forEach((task) => {
     const id = String(task?.id ?? '').trim();
     if (!id) return;
     if (seen.has(id)) {
@@ -144,11 +177,88 @@ const buildTasksForCalculation = (tasks, { hoursPerDay = 8 } = {}) => {
     seen.add(id);
   });
 
+  return Array.from(new Set(duplicateIds));
+};
+
+const splitTasksByIdKind = (tasks) => {
+  const edgeTasks = [];
+  const numericTasks = [];
+
+  (Array.isArray(tasks) ? tasks : []).forEach((task) => {
+    const id = String(task?.id ?? '').trim();
+    const kind = getTaskIdKind(id);
+    if (kind === 'edge') {
+      edgeTasks.push({ ...task, id });
+    } else if (kind === 'numeric') {
+      numericTasks.push({ ...task, id });
+    }
+  });
+
+  return { edgeTasks, numericTasks };
+};
+
+const buildTasksForAutoMode = (tasks, { hoursPerDay = 8 } = {}) => {
+  const { edgeTasks, numericTasks } = splitTasksByIdKind(tasks);
+
+  if (numericTasks.length === 0) {
+    return {
+      tasks: edgeTasks,
+      mode: 'edge',
+      duplicateIds: collectDuplicateTaskIds(edgeTasks),
+      errors: [],
+    };
+  }
+
+  const convertedNumericTasks = aonToAoa(numericTasks, { hoursPerDay, createSink: true });
+  if (edgeTasks.length === 0) {
+    return {
+      tasks: convertedNumericTasks,
+      mode: 'numeric',
+      duplicateIds: collectDuplicateTaskIds(convertedNumericTasks),
+      errors: [],
+    };
+  }
+
+  const mergedTasks = [...edgeTasks, ...convertedNumericTasks];
+
   return {
     tasks: mergedTasks,
     mode: 'mixed',
-    duplicateIds: Array.from(new Set(duplicateIds)),
+    duplicateIds: collectDuplicateTaskIds(mergedTasks),
+    errors: [],
   };
+};
+
+const buildTasksForManualMode = (tasks) => {
+  const { edgeTasks, numericTasks } = splitTasksByIdKind(tasks);
+
+  if (numericTasks.length > 0) {
+    const invalidNumericIds = numericTasks.map((task) => String(task?.id ?? '').trim()).filter(Boolean);
+    return {
+      tasks: [],
+      mode: 'invalid',
+      duplicateIds: [],
+      errors: [
+        'В ручном режиме автопостроение отключено.',
+        `Для расчета допустимы только ID вида "N-M". Найдены числовые ID: ${invalidNumericIds.join(', ')}`,
+      ],
+    };
+  }
+
+  return {
+    tasks: edgeTasks,
+    mode: 'edge',
+    duplicateIds: collectDuplicateTaskIds(edgeTasks),
+    errors: [],
+  };
+};
+
+const buildTasksForCalculation = (tasks, { hoursPerDay = 8, projectMode = PROJECT_MODES.AUTO_AOA } = {}) => {
+  if (projectMode === PROJECT_MODES.MANUAL_AOA) {
+    return buildTasksForManualMode(tasks);
+  }
+
+  return buildTasksForAutoMode(tasks, { hoursPerDay });
 };
 
 const buildResolvedEdgeBySourceId = (sourceTasks, tasksForCalc) => {
@@ -212,14 +322,7 @@ const validateEdgePredecessorBinding = (sourceTasks, edgeBySourceId, normalizePr
 };
 
 function App() {
-  const [project, setProject] = useState({
-    id: 'project_' + Date.now(),
-    name: 'Новый проект',
-    startDate: new Date().toISOString().split('T')[0],
-    tasks: [],
-    criticalPath: [],
-    projectDuration: 0
-  });
+  const [project, setProject] = useState(() => createDefaultProjectState());
   const [resourceLimit, setResourceLimit] = useState(10);
   const [lastNumericLimit, setLastNumericLimit] = useState(10); 
   const [hoursPerDay, setHoursPerDay] = useState(8);
@@ -287,8 +390,9 @@ function App() {
     let didChange = false;
     const updatedTasks = project.tasks.map(task => {
       const laborHours = Number.isFinite(+task.laborIntensity) ? +task.laborIntensity : null;
-      const performers = Math.max(1, parseInt(task.numberOfPerformers, 10) || 1);
-      if (laborHours != null && laborHours > 0) {
+      const parsedPerformers = parseInt(task.numberOfPerformers, 10);
+      const performers = Number.isFinite(parsedPerformers) ? Math.max(0, parsedPerformers) : 0;
+      if (performers > 0 && laborHours != null && laborHours > 0) {
         const duration = calcDurationDays(laborHours, performers, hoursPerDay);
         if (Number.isFinite(duration) && duration !== task.duration) {
           didChange = true;
@@ -519,7 +623,7 @@ function App() {
         project,
         calculationResults,
         savedAt: new Date().toISOString(),
-        version: '1.0'
+        version: '1.1'
       };
       
       const dataStr = JSON.stringify(projectData, null, 2);
@@ -558,10 +662,13 @@ function App() {
             const projectData = JSON.parse(e.target.result);
             
             if (projectData.project && projectData.project.tasks) {
-              setProject(projectData.project);
-              if (projectData.calculationResults) {
-                setCalculationResults(projectData.calculationResults);
-              }
+              const nextCalculationResults = projectData.calculationResults || null;
+              setProject(
+                normalizeProjectState(projectData.project, {
+                  hasCalculationResults: Boolean(nextCalculationResults),
+                })
+              );
+              setCalculationResults(nextCalculationResults);
               
               logger.logSystemEvent('PROJECT_LOADED', {
                 projectId: projectData.project.id,
@@ -585,14 +692,19 @@ function App() {
 
   const handleAddTask = (task) => {
     try {
-      const performers = Math.max(1, parseInt(task.numberOfPerformers, 10) || 1);
+      const parsedPerformers = parseInt(task.numberOfPerformers, 10);
+      const performers = Number.isFinite(parsedPerformers) ? Math.max(0, parsedPerformers) : 0;
+      const isDummyTask = performers === 0;
       const newTask = {
         ...task,
         id: task.id || `${task.from}-${task.to}`,
-        laborIntensity: Number.isFinite(+task.laborIntensity)
-          ? +task.laborIntensity
-          : calcLaborHours(task.duration, performers, hoursPerDay),
-        numberOfPerformers: performers
+        laborIntensity: isDummyTask
+          ? 0
+          : (Number.isFinite(+task.laborIntensity)
+              ? +task.laborIntensity
+              : calcLaborHours(task.duration, performers, hoursPerDay)),
+        numberOfPerformers: performers,
+        isDummy: isDummyTask,
       };
 
       const updatedTasks = [...project.tasks, newTask];
@@ -972,17 +1084,32 @@ function App() {
       projectId: project.id
     });
 
-    const calcInput = buildTasksForCalculation(sourceTasks, { hoursPerDay });
+    const calcInput = buildTasksForCalculation(sourceTasks, { hoursPerDay, projectMode: project.mode });
+    if (Array.isArray(calcInput.errors) && calcInput.errors.length > 0) {
+      setValidationErrors(calcInput.errors);
+      logger.logCalculationError(new Error('Calculation mode validation failed'), {
+        errors: calcInput.errors,
+        tasksCount: sourceTasks.length,
+        projectId: project.id,
+        projectMode: project.mode,
+      });
+      setActiveTab('input');
+      return;
+    }
+
     if (calcInput.duplicateIds.length > 0) {
       const errors = [
-        `После адаптации обнаружены дубли ID дуг: ${calcInput.duplicateIds.join(', ')}`,
-        'Измените конфликтующие ID (обычно это ручные дуги, совпавшие с автосгенерированными).',
+        `После подготовки работ к расчету обнаружены дубли ID дуг: ${calcInput.duplicateIds.join(', ')}`,
+        project.mode === PROJECT_MODES.AUTO_AOA
+          ? 'Измените конфликтующие ID. Обычно это ручные дуги, совпавшие с автосгенерированными.'
+          : 'В ручном режиме каждая дуга должна иметь уникальный ID вида "N-M".',
       ];
       setValidationErrors(errors);
-      logger.logCalculationError(new Error('Duplicate edge IDs after adaptation'), {
+      logger.logCalculationError(new Error('Duplicate edge IDs after preparation'), {
         errors,
         tasksCount: sourceTasks.length,
         projectId: project.id,
+        projectMode: project.mode,
       });
       setActiveTab('input');
       return;
@@ -1007,14 +1134,15 @@ function App() {
     }
 
     const normalizedTasks = tasksForCalc.map(t => {
-      const p = Math.max(1, parseInt(t.numberOfPerformers, 10) || 1);
-      const isDummy = t.isDummy === true || Number(t.duration) === 0;
-
+      const parsedPerformers = parseInt(t.numberOfPerformers, 10);
+      const p = Number.isFinite(parsedPerformers) ? Math.max(0, parsedPerformers) : 0;
       const laborHours = Number.isFinite(+t.laborIntensity) ? +t.laborIntensity : null;
+      const isDummy = p === 0;
       let durationDays;
 
       if (isDummy) {
-        durationDays = 0;
+        const d = Number.isFinite(+t.duration) ? +t.duration : 0;
+        durationDays = Math.max(0, roundToOneDecimal(d || 0));
       } else if (laborHours != null && laborHours > 0) {
         durationDays = Math.max(0.1, calcDurationDays(laborHours, p, hoursPerDay));
       } else {
@@ -1033,14 +1161,16 @@ function App() {
         isDummy,
         numberOfPerformers: p,
         duration: durationDays,
-        laborIntensity: laborHours != null && laborHours > 0
-          ? laborHours
-          : calcLaborHours(durationDays, p, hoursPerDay),
+        laborIntensity: isDummy
+          ? 0
+          : (laborHours != null && laborHours > 0
+              ? laborHours
+              : calcLaborHours(durationDays, p, hoursPerDay)),
         predecessors: preds,
       };
     });
 
-    const validation = validateNetwork(normalizedTasks, { hoursPerDay });
+    const validation = validateNetwork(normalizedTasks, { hoursPerDay, projectMode: project.mode });
     if (!validation.isValid) {
       setValidationErrors(validation.errors);
       logger.logCalculationError(new Error('Validation failed'), {
@@ -1100,7 +1230,8 @@ function App() {
     setProject(prev => ({
       ...prev,
       criticalPath: result.criticalPath,
-      projectDuration: result.projectDuration
+      projectDuration: result.projectDuration,
+      autoModeUnlocked: prev.mode === PROJECT_MODES.AUTO_AOA ? true : prev.autoModeUnlocked,
     }));
 
     logger.logCalculationSuccess(result);
@@ -1128,7 +1259,14 @@ function App() {
 
   const handleLoadExample = () => {
     try {
-      setProject(prev => ({ ...prev, tasks: [...exampleTasks] }));
+      setProject(prev => ({
+        ...prev,
+        tasks: [...exampleTasks],
+        criticalPath: [],
+        projectDuration: 0,
+        mode: PROJECT_MODES.MANUAL_AOA,
+        autoModeUnlocked: false,
+      }));
       setCalculationResults(null);
       setValidationErrors([]);
       
@@ -1167,7 +1305,14 @@ function App() {
         });
       }
 
-      setProject(prev => ({ ...prev, tasks }));
+      setProject(prev => ({
+        ...prev,
+        tasks,
+        criticalPath: [],
+        projectDuration: 0,
+        mode: PROJECT_MODES.AUTO_AOA,
+        autoModeUnlocked: false,
+      }));
       setCalculationResults(null);
       setValidationErrors([]);
 
@@ -1194,7 +1339,13 @@ function App() {
 
   const handleClearAll = () => {
     try {
-      setProject(prev => ({ ...prev, tasks: [], criticalPath: [], projectDuration: 0 }));
+      setProject(prev => ({
+        ...prev,
+        tasks: [],
+        criticalPath: [],
+        projectDuration: 0,
+        autoModeUnlocked: false,
+      }));
       setCalculationResults(null);
       setBaselinePlan(null);
       setValidationErrors([]);
@@ -1207,10 +1358,15 @@ function App() {
 
   const handleProjectImport = (importedProject, importedResults = null) => {
     try {
-      setProject({
-        ...importedProject,
-        id: importedProject.id || 'imported_' + Date.now()
-      });
+      setProject(
+        normalizeProjectState(
+          {
+            ...importedProject,
+            id: importedProject.id || 'imported_' + Date.now(),
+          },
+          { hasCalculationResults: Boolean(importedResults) }
+        )
+      );
       
       if (importedResults) {
         setCalculationResults(importedResults);
@@ -1232,7 +1388,12 @@ function App() {
 
   const handleTasksImport = (importedTasks) => {
     try {
-      setProject(prev => ({ ...prev, tasks: importedTasks }));
+      setProject(prev => normalizeProjectState({
+        ...prev,
+        tasks: Array.isArray(importedTasks) ? importedTasks : [],
+        criticalPath: [],
+        projectDuration: 0,
+      }));
       setCalculationResults(null);
       setValidationErrors([]);
       
@@ -1253,8 +1414,13 @@ function App() {
     try {
       const recoveredData = loadAutosavedData();
       if (recoveredData) {
-        setProject(recoveredData.project);
-        setCalculationResults(recoveredData.calculationResults);
+        const nextCalculationResults = recoveredData.calculationResults || null;
+        setProject(
+          normalizeProjectState(recoveredData.project, {
+            hasCalculationResults: Boolean(nextCalculationResults),
+          })
+        );
+        setCalculationResults(nextCalculationResults);
         setShowRecoveryDialog(false);
         logger.logUserAction('RECOVER_AUTOSAVED_DATA', {
           timestamp: recoveredData.timestamp
@@ -1302,7 +1468,7 @@ function App() {
     const map = {};
     const tasks = Array.isArray(calculationResults?.tasks) ? calculationResults.tasks : [];
     tasks.forEach(task => {
-      if (!task || task.isDummy === true) return;
+      if (!task) return;
       const edgeId = String(task.id ?? '').trim();
       if (!looksLikeEdgeId(edgeId)) return;
       const sourceId = String(task.sourceTaskId ?? edgeId).trim();
@@ -1506,6 +1672,13 @@ function App() {
               <TaskInput 
                 tasks={project.tasks}
                 onTasksChange={(updatedTasks) => setProject(prev => ({ ...prev, tasks: updatedTasks }))}
+                projectMode={project.mode}
+                autoModeUnlocked={Boolean(project.autoModeUnlocked)}
+                onProjectModeChange={(mode) => setProject(prev => ({
+                  ...prev,
+                  mode,
+                  autoModeUnlocked: false,
+                }))}
                 resourceLimit={resourceLimit}
                 onResourceLimitChange={setResourceLimit}
                  isLimitExceeded={isResourceLimitExceeded} 

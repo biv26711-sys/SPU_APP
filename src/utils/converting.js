@@ -80,10 +80,14 @@ export function aonToAoa(
 
     const preds = normalizePredecessors(t.predecessors);
 
-    const p = Math.max(1, parseInt(t.numberOfPerformers, 10) || 1);
+    const parsedPerformers = parseInt(t.numberOfPerformers, 10);
+    const p = Number.isFinite(parsedPerformers) ? Math.max(0, parsedPerformers) : 0;
     const labor = Number.isFinite(+t.laborIntensity) ? +t.laborIntensity : null;
+    const isDummy = p === 0;
     let dDays;
-    if (labor != null && labor > 0) {
+    if (isDummy) {
+      dDays = Math.max(0, Number(t.duration) || 0);
+    } else if (labor != null && labor > 0) {
       dDays = Math.max(0.1, calcDurationDays(labor, p, hoursPerDay));
     } else {
       dDays = Math.max(0.1, Number(t.duration) || 0);
@@ -94,6 +98,7 @@ export function aonToAoa(
       name: t.name || t.title || String(t.id),
       preds,
       durationDays: dDays,
+      isDummy,
       raw: t,
     });
   }
@@ -111,7 +116,7 @@ export function aonToAoa(
       id: `${fromEvent}-${toEvent}`,
       name,
       duration: 0,
-      numberOfPerformers: 1,
+      numberOfPerformers: 0,
       laborIntensity: 0,
       predecessors: [],
       isDummy: true,
@@ -153,12 +158,16 @@ export function aonToAoa(
       id: `${startEvent}-${endEvent}`,
       name: t.name,
       duration: t.durationDays,
-      numberOfPerformers: Math.max(1, parseInt(t.raw?.numberOfPerformers, 10) || 1),
-      laborIntensity: Number.isFinite(+t.raw?.laborIntensity)
-        ? +t.raw.laborIntensity
-        : calcLaborHours(t.durationDays, t.raw?.numberOfPerformers, hoursPerDay),
+      numberOfPerformers: Number.isFinite(parseInt(t.raw?.numberOfPerformers, 10))
+        ? Math.max(0, parseInt(t.raw.numberOfPerformers, 10))
+        : 0,
+      laborIntensity: t.isDummy === true
+        ? 0
+        : (Number.isFinite(+t.raw?.laborIntensity)
+            ? +t.raw.laborIntensity
+            : calcLaborHours(t.durationDays, t.raw?.numberOfPerformers, hoursPerDay)),
       predecessors: [],
-      isDummy: false,
+      isDummy: t.isDummy === true,
       sourceTaskId: tid,
     });
   }
@@ -176,7 +185,7 @@ export function aonToAoa(
           id: `${e}-${SINK_EVENT}`,
           name: 'Фиктивная (слияние в финиш)',
           duration: 0,
-          numberOfPerformers: 1,
+          numberOfPerformers: 0,
           laborIntensity: 0,
           predecessors: [],
           isDummy: true,

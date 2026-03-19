@@ -232,7 +232,7 @@ useImperativeHandle(ref, () => ({
     const tasksForRender = aoaTasks.map(t => ({
       ...t,
       duration: Number(t.duration ?? 0),
-      isDummy: t.isDummy === true || Number(t.duration ?? 0) === 0
+      isDummy: t.isDummy === true || Number(t.numberOfPerformers ?? -1) === 0
     }));
 
     if (renderMode === 'aon') {
@@ -487,7 +487,7 @@ useImperativeHandle(ref, () => ({
       const fromNode = nodes.find(n => n.id === from);
       const toNode = nodes.find(n => n.id === to);
 
-      const isCriticalVisual = task.isDummy ? false : !!task.isCritical;
+      const isCriticalVisual = !!task.isCritical;
       
       return {
         from: fromNode,
@@ -636,8 +636,8 @@ useImperativeHandle(ref, () => ({
     ctx.save();
     if (isDummy) {
       ctx.setLineDash([6, 6]);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = colors.normalEdge;
+      ctx.lineWidth = isCrit ? 3 : 2;
+      ctx.strokeStyle = isCrit ? colors.criticalEdge : colors.normalEdge;
       ctx.globalAlpha = 0.9;
     } else {
       ctx.setLineDash([]);
@@ -705,7 +705,9 @@ useImperativeHandle(ref, () => ({
       const textY = labelMidY + offsetY;
 
       const taskName = edge.task.name || edge.task.id;
-      const durationText = isDummy ? '(фикт.)' : `(${edge.task.duration}д)`;
+      const durationText = isDummy
+        ? (Number(edge.task.duration ?? 0) > 0 ? `(фикт., ${edge.task.duration}д)` : '(фикт.)')
+        : `(${edge.task.duration}д)`;
 
       ctx.font = '10px Arial';
       const nameWidth = ctx.measureText(taskName).width;
@@ -733,7 +735,7 @@ useImperativeHandle(ref, () => ({
       ctx.fillText(taskName, textX, textY - lineHeight / 2);
 
       ctx.font = '9px Arial';
-      ctx.fillStyle = isDummy ? colors.normalEdge : (isCrit ? colors.criticalEdge : colors.normalEdge);
+      ctx.fillStyle = isCrit ? colors.criticalEdge : colors.normalEdge;
       ctx.fillText(durationText, textX, textY + lineHeight / 2);
     }
 
@@ -746,8 +748,8 @@ useImperativeHandle(ref, () => ({
       ...task,
       from,
       to,
-      isDummy: task.isDummy === true || Number(task.duration ?? 0) === 0,
-      isCritical: task.isDummy ? false : !!task.isCritical,
+      isDummy: task.isDummy === true || Number(task.numberOfPerformers ?? -1) === 0,
+      isCritical: !!task.isCritical,
     };
   };
 
@@ -769,7 +771,7 @@ useImperativeHandle(ref, () => ({
       const event = queue.shift();
       const outgoing = outByEvent.get(event) || [];
       outgoing.forEach(e => {
-        if (e.isDummy) {
+        if (e.isDummy && Number(e.duration ?? 0) === 0) {
           if (!seen.has(e.to)) {
             seen.add(e.to);
             queue.push(e.to);
@@ -784,7 +786,7 @@ useImperativeHandle(ref, () => ({
 
   const buildAONGraph = (aoaTasks) => {
     const edges = aoaTasks.map(parseEdge);
-    const real = edges.filter(e => !e.isDummy);
+    const real = edges.filter(e => !(e.isDummy && Number(e.duration ?? 0) === 0));
     const { outByEvent } = indexByEvents(edges);
 
     const aonNodes = real.map(e => ({

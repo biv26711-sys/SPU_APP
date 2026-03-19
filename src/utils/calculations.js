@@ -37,12 +37,31 @@ export const validateTask = (task) => {
     errors.push('Название задачи не может быть пустым');
   }
   
-  if (!task.duration || task.duration <= 0) {
-    errors.push('Продолжительность должна быть больше 0');
-  }
-  
-  if (!task.numberOfPerformers || task.numberOfPerformers <= 0) {
-    errors.push('Количество исполнителей должно быть больше 0');
+  const duration = Number(task.duration);
+  const performers = Number(task.numberOfPerformers);
+  const labor = Number(task.laborIntensity);
+  const isDummy = performers === 0;
+
+  if (isDummy) {
+    if (!Number.isFinite(duration) || duration < 0) {
+      errors.push('Для фиктивной работы продолжительность должна быть не меньше 0');
+    }
+    if (performers !== 0) {
+      errors.push('Для фиктивной работы количество исполнителей должно быть равно 0');
+    }
+    if (!Number.isFinite(labor) || labor !== 0) {
+      errors.push('Для фиктивной работы трудоемкость должна быть равна 0');
+    }
+  } else {
+    if (!Number.isFinite(duration) || duration <= 0) {
+      errors.push('Продолжительность должна быть больше 0');
+    }
+    if (!Number.isFinite(performers) || performers <= 0) {
+      errors.push('Количество исполнителей должно быть больше 0');
+    }
+    if (!Number.isFinite(labor) || labor <= 0) {
+      errors.push('Для обычной работы трудоемкость должна быть больше 0');
+    }
   }
   
   if (task.id && !task.id.includes('-')) {
@@ -103,15 +122,18 @@ export const createTask = (
   hoursPerDay = 8
 ) => {
   const parsedDuration = parseFloat(duration) || 0;
-  const parsedPerformers = Math.max(1, parseInt(numberOfPerformers, 10) || 1);
+  const rawPerformers = parseInt(numberOfPerformers, 10);
+  const parsedPerformers = Number.isFinite(rawPerformers) ? Math.max(0, rawPerformers) : 0;
   const parsedLabor = Number(laborIntensity);
   return {
     id: id || '',
     name: name || '',
     duration: parsedDuration,
-    laborIntensity: Number.isFinite(parsedLabor)
-      ? parsedLabor
-      : calcLaborHours(parsedDuration, parsedPerformers, hoursPerDay),
+    laborIntensity: parsedPerformers === 0
+      ? 0
+      : (Number.isFinite(parsedLabor)
+          ? parsedLabor
+          : calcLaborHours(parsedDuration, parsedPerformers, hoursPerDay)),
     numberOfPerformers: parsedPerformers,
     predecessors: Array.isArray(predecessors) ? predecessors : [],
     createdAt: new Date().toISOString()

@@ -33,7 +33,7 @@ const formatReportNumber = (value) => {
 
 const formatPerformers = (value) => {
   const number = parseInt(value, 10);
-  if (!Number.isFinite(number) || number <= 0) return '1';
+  if (!Number.isFinite(number) || number < 0) return '0';
   return String(number);
 };
 
@@ -49,7 +49,7 @@ const buildEdgeIdByTaskIdMap = (results) => {
   const rows = Array.isArray(results?.tasks) ? results.tasks : [];
 
   rows.forEach((task) => {
-    if (!task || task.isDummy === true) return;
+    if (!task) return;
     const edgeId = String(task.id ?? '').trim();
     if (!edgeId) return;
     const taskId = String(task.sourceTaskId ?? edgeId).trim();

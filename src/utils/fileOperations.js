@@ -9,7 +9,7 @@ const formatExportNumber = (value) => {
 
 const formatPerformers = (value) => {
   const number = parseInt(value, 10);
-  if (!Number.isFinite(number) || number <= 0) return 1;
+  if (!Number.isFinite(number) || number < 0) return 0;
   return number;
 };
 
@@ -251,16 +251,22 @@ export const importTasksFromCSV = (file) => {
             continue;
           }
 
+          const parsedDuration = parseFloat(columns[2]);
+          const parsedLabor = columns[3] === '' ? 0 : parseFloat(columns[3]);
+          const parsedPerformers = parseInt(columns[4], 10);
           const task = {
             id: columns[0],
             name: columns[1],
-            duration: parseFloat(columns[2]) || 0,
-            laborIntensity: parseFloat(columns[3]) || parseFloat(columns[2]) || 0,
-            numberOfPerformers: parseInt(columns[4]) || 1,
+            duration: Number.isFinite(parsedDuration) ? parsedDuration : 0,
+            laborIntensity: Number.isFinite(parsedLabor) ? parsedLabor : 0,
+            numberOfPerformers: Number.isFinite(parsedPerformers) ? Math.max(0, parsedPerformers) : 0,
             predecessors: columns[5] ? columns[5].split(',').map(p => p.trim()).filter(p => p) : []
           };
 
-          if (task.id && task.name && task.duration > 0 && task.numberOfPerformers > 0) {
+          const isDummyTask = task.numberOfPerformers === 0 && task.laborIntensity === 0 && task.duration >= 0;
+          const isValidRegularTask = task.duration > 0 && task.laborIntensity > 0 && task.numberOfPerformers > 0;
+
+          if (task.id && task.name && (isDummyTask || isValidRegularTask)) {
             tasks.push(task);
           } else {
             console.warn(`Строка ${i + 2}: некорректные данные, пропускаем`);

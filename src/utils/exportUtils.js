@@ -2,7 +2,7 @@ import { Document, Packer, Paragraph, Table as DocxTable, TableRow, TableCell, W
 
 const formatPerformers = (value) => {
   const number = parseInt(value, 10);
-  if (!Number.isFinite(number) || number <= 0) return '1';
+  if (!Number.isFinite(number) || number < 0) return '0';
   return String(number);
 };
 

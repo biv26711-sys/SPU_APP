@@ -7,11 +7,14 @@ export class SPUTask {
     this.duration = parseFloat(duration) || 0;
     this.from = from;
     this.to = to;
-    this.numberOfPerformers = Math.max(1, parseInt(numberOfPerformers, 10) || 1);
+    const parsedPerformers = parseInt(numberOfPerformers, 10);
+    this.numberOfPerformers = Number.isFinite(parsedPerformers) ? Math.max(0, parsedPerformers) : 0;
     const parsedLabor = Number(laborIntensity);
-    this.laborIntensity = Number.isFinite(parsedLabor)
-      ? parsedLabor
-      : calcLaborHours(this.duration, this.numberOfPerformers, hoursPerDay);
+    this.laborIntensity = this.numberOfPerformers === 0
+      ? 0
+      : (Number.isFinite(parsedLabor)
+          ? parsedLabor
+          : calcLaborHours(this.duration, this.numberOfPerformers, hoursPerDay));
     this.ES = 0;
     this.EF = 0; 
     this.LS = 0; 
@@ -247,7 +250,7 @@ export class SPUCalculation {
         laborIntensity: spuTask.laborIntensity,
         numberOfPerformers: spuTask.numberOfPerformers,
         predecessors: sourceTask?.predecessors || [],
-        isDummy: Boolean(sourceTask?.isDummy), // новое
+        isDummy: Number(sourceTask?.numberOfPerformers) === 0 || Boolean(sourceTask?.isDummy),
         sourceTaskId: sourceTask?.sourceTaskId ?? null,
         earlyStart: spuTask.ES,
         earlyFinish: spuTask.EF,
@@ -285,7 +288,7 @@ export class SPUCalculation {
     }
   }
 
-  static validateNetwork(tasks, { hoursPerDay = 8 } = {}) {
+  static validateNetwork(tasks, { hoursPerDay = 8, projectMode = 'auto_aoa' } = {}) {
     const errors = [];
     
     if (!Array.isArray(tasks) || tasks.length === 0) { 
@@ -303,25 +306,60 @@ export class SPUCalculation {
         errors.push(`Отсутствует название для задачи: ${task.id}`);
       }
 
-      const isDummy = task.isDummy === true || Number(task.duration) === 0;
       const dur = Number(task.duration);
+      const perf = parseInt(task.numberOfPerformers, 10);
+      const labor = Number(task.laborIntensity);
+      const isDummy = perf === 0;
 
       if (isDummy) {
         if (!Number.isFinite(dur) || dur < 0) {
-          errors.push(`Некорректная продолжительность (ожидалось 0) для фиктивной задачи: ${task.id}`);
+          errors.push(`Некорректная продолжительность для фиктивной задачи: ${task.id}`);
+        }
+        if (!Number.isFinite(perf) || perf !== 0) {
+          errors.push(`Для фиктивной задачи количество исполнителей должно быть равно 0: ${task.id}`);
+        }
+        if (!Number.isFinite(labor) || labor !== 0) {
+          errors.push(`Для фиктивной задачи трудоемкость должна быть равна 0: ${task.id}`);
         }
       } else {
         if (!Number.isFinite(dur) || dur < 0.1) {
           errors.push(`Некорректная продолжительность для задачи: ${task.id}`);
         }
-      }
-
-      const perf = parseInt(task.numberOfPerformers, 10);
-      if (!Number.isFinite(perf) || perf <= 0) {
-        errors.push(`Некорректное количество исполнителей для задачи: ${task.id}`);
+        if (!Number.isFinite(perf) || perf <= 0) {
+          errors.push(`Некорректное количество исполнителей для задачи: ${task.id}`);
+        }
+        if (!Number.isFinite(labor) || labor <= 0) {
+          errors.push(`Для обычной задачи трудоемкость должна быть больше 0: ${task.id}`);
+        }
       }
       
     });
+
+    if (projectMode === 'manual_aoa') {
+      const incoming = new Map();
+      const outgoing = new Map();
+      const allNodes = new Set();
+
+      tasks.forEach(task => {
+        const match = String(task?.id ?? '').trim().match(/^(\d+)-(\d+)$/);
+        if (!match) return;
+        const from = match[1];
+        const to = match[2];
+        allNodes.add(from);
+        allNodes.add(to);
+        outgoing.set(from, (outgoing.get(from) || 0) + 1);
+        incoming.set(to, (incoming.get(to) || 0) + 1);
+      });
+
+      const startEvents = Array.from(allNodes).filter(node => !incoming.has(node));
+      const endEvents = Array.from(allNodes).filter(node => !outgoing.has(node));
+
+      if (startEvents.length !== 1 || endEvents.length !== 1) {
+        errors.push(
+          `больше кон/нач события, добавьте работы (начальных: ${startEvents.length}, конечных: ${endEvents.length})`
+        );
+      }
+    }
 
     try {
       const spuTasks = tasks.map(task => {

@@ -38,8 +38,13 @@ const formatDisplayNumber = (num) => {
 
 const formatPerformers = (value) => {
   const number = parseInt(value, 10);
-  if (!Number.isFinite(number) || number <= 0) return 1;
+  if (!Number.isFinite(number) || number < 0) return 0;
   return number;
+};
+
+const getDummyLabel = (task) => {
+  if (!(task?.isDummy || Number(task?.numberOfPerformers ?? -1) === 0)) return null;
+  return Number(task?.duration ?? 0) > 0 ? 'Фиктивная (t)' : 'Фиктивная (0)';
 };
 
 const CalculationResults = ({ results, project }) => {
@@ -119,8 +124,8 @@ const CalculationResults = ({ results, project }) => {
     document.body.removeChild(link);
   };
 
-  const criticalTasks = results.tasks.filter(t => !t.isDummy && t.isCritical);  
-  const nonCriticalTasks = results.tasks.filter(t => !t.isDummy && !t.isCritical);
+  const criticalTasks = results.tasks.filter(t => t.isCritical);  
+  const nonCriticalTasks = results.tasks.filter(t => !t.isCritical);
 
   return (
     <div className="space-y-6">
@@ -291,7 +296,7 @@ const CalculationResults = ({ results, project }) => {
                           <td className="border border-gray-300 px-3 py-2 font-medium">
                             {task.id}
                             {isCriticalVisual && <Badge variant="destructive" className="ml-2 text-xs">К</Badge>}
-                            {task.isDummy && <Badge variant="outline" className="ml-2 text-xs">Фиктивная</Badge>}
+                            {getDummyLabel(task) && <Badge variant="outline" className="ml-2 text-xs">{getDummyLabel(task)}</Badge>}
                           </td>
                           <td className="border border-gray-300 px-3 py-2">
                             {task.name}
@@ -369,8 +374,10 @@ const CalculationResults = ({ results, project }) => {
                               const isCriticalVisual = Boolean(task.isCritical);
                               return (
                                 <p>
-                                  Статус: {task.isDummy
-                                    ? (isCriticalVisual ? 'фиктивная критическая работа' : 'фиктивная работа')
+                                  Статус: {getDummyLabel(task)
+                                    ? (Number(task.duration ?? 0) > 0
+                                        ? (isCriticalVisual ? 'фиктивная работа с длительностью на критическом пути' : 'фиктивная работа с длительностью')
+                                        : (isCriticalVisual ? 'фиктивная работа без длительности на критическом пути' : 'фиктивная работа без длительности'))
                                     : (isCriticalVisual ? 'критическая работа' : 'некритическая работа')}
                                 </p>
                               );

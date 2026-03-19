@@ -14,13 +14,15 @@ export const createTask = (id, name, duration, laborIntensity, numberOfPerformer
   isCritical: false,
 });
 
-export const createProject = (id, name, tasks = [], startDate = new Date()) => ({
+export const createProject = (id, name, tasks = [], startDate = new Date(), options = {}) => ({
   id,
   name,
   tasks,
   startDate,
   criticalPath: [], 
   projectDuration: null,
+  mode: options.mode || 'auto_aoa',
+  autoModeUnlocked: Boolean(options.autoModeUnlocked),
 });
 
 export const createEvent = (id, name) => ({
@@ -46,5 +48,6 @@ export const sampleProject = createProject(
   'project-1',
   'Пример проекта СПУ',
   sampleTasks,
-  new Date()
+  new Date(),
+  { mode: 'manual_aoa', autoModeUnlocked: false }
 );

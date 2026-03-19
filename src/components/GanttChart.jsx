@@ -578,7 +578,7 @@ const drawResourceChart = (ctx, chartWidth, totalHeight) => {
   const drawGanttChart = () => {
     const visibleTasks = localTasks.filter(task => {
       if (!showDummyTasks) {
-      const isDummy = task.duration === 0 || task.name.toLowerCase().includes('фиктивная');
+      const isDummy = task.isDummy === true || Number(task.numberOfPerformers ?? -1) === 0;
       return !isDummy;
     }
     return true;

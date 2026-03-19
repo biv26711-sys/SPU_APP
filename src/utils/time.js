@@ -4,9 +4,20 @@ export function roundToOneDecimal(value) {
   return Math.round(num * 10) / 10;
 }
 
+const normalizeStoredPerformers = (performers) => {
+  const parsed = parseInt(performers, 10);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, parsed);
+};
+
+const getEffectivePerformersForMath = (performers) => {
+  const stored = normalizeStoredPerformers(performers);
+  return stored > 0 ? stored : 1;
+};
+
 export function calcDurationDays(laborHours, performers, hoursPerDay) {
   const hours = Math.max(0, parseFloat(laborHours) || 0);
-  const p = Math.max(1, parseInt(performers, 10) || 1);
+  const p = getEffectivePerformersForMath(performers);
   const dayHours = Math.max(0.1, parseFloat(hoursPerDay) || 0);
   if (hours === 0) return 0;
   return roundToOneDecimal(hours / (dayHours * p));
@@ -14,7 +25,7 @@ export function calcDurationDays(laborHours, performers, hoursPerDay) {
 
 export function calcLaborHours(durationDays, performers, hoursPerDay) {
   const days = Math.max(0, parseFloat(durationDays) || 0);
-  const p = Math.max(1, parseInt(performers, 10) || 1);
+  const p = getEffectivePerformersForMath(performers);
   const dayHours = Math.max(0.1, parseFloat(hoursPerDay) || 0);
   if (days === 0) return 0;
   return roundToOneDecimal(days * dayHours * p);

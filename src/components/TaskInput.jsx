@@ -37,6 +37,9 @@ const parseEdgeNodes = (edgeId) => {
 const TaskInput = ({
   tasks,
   onTasksChange,
+  projectMode = 'auto_aoa',
+  autoModeUnlocked = false,
+  onProjectModeChange,
   resourceLimit,
   onResourceLimitChange,
   isLimitExceeded,
@@ -58,6 +61,8 @@ const TaskInput = ({
     numberOfPerformers: '1',
     predecessors: ''
   });
+  const formPerformersRaw = parseInt(formData.numberOfPerformers, 10);
+  const isDummyFormMode = Number.isFinite(formPerformersRaw) && formPerformersRaw === 0;
   const [predecessorSelections, setPredecessorSelections] = useState(['']);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   useEffect(() => {
@@ -65,13 +70,14 @@ const TaskInput = ({
   }, [resourceLimit]);
 
   useEffect(() => {
+    if (isDummyFormMode) return;
+    if (!String(formData.laborIntensity ?? '').trim()) return;
     const laborHours = parseFloat(formData.laborIntensity) || 0;
-    if (!laborHours) return;
     const duration = calcDurationDays(laborHours, formData.numberOfPerformers, hoursPerDay);
     if (Number.isFinite(duration)) {
       setFormData(prev => ({ ...prev, duration: String(duration) }));
     }
-  }, [hoursPerDay, formData.laborIntensity, formData.numberOfPerformers]);
+  }, [hoursPerDay, formData.laborIntensity, formData.numberOfPerformers, isDummyFormMode]);
 
   const [editingTask, setEditingTask] = useState(null);
 
@@ -115,7 +121,14 @@ const TaskInput = ({
 
   const taskListIdModeInfo = getTaskListIdMode(tasks);
   const isPostCalculationMode = Boolean(showCalculatedEdgeIds);
+  const isAutoMode = projectMode === 'auto_aoa';
+  const isManualMode = projectMode === 'manual_aoa';
+  const isModeSelectionLocked = Array.isArray(tasks) && tasks.length > 0;
+  const hasStoredNumericTasks = (Array.isArray(tasks) ? tasks : []).some(task => detectTaskIdKind(task?.id) === 'numeric');
+  const hasStoredEdgeTasks = (Array.isArray(tasks) ? tasks : []).some(task => detectTaskIdKind(task?.id) === 'edge');
+  const isAutoGraphBindingLocked = isAutoMode && autoModeUnlocked && hasStoredNumericTasks && hasStoredEdgeTasks;
   const currentTaskId = String(formData.id || '').trim();
+  const isEditingLockedNumericTask = Boolean(editingTask) && isAutoGraphBindingLocked && detectTaskIdKind(editingTask?.id) === 'numeric';
   const editingTaskIndex = editingTask
     ? tasks.findIndex(task => String(task?.id) === String(editingTask.id))
     : -1;
@@ -185,6 +198,13 @@ const TaskInput = ({
     return [];
   };
 
+  const areSamePredecessorSets = (left, right) => {
+    const leftNorm = Array.from(new Set((Array.isArray(left) ? left : []).map(value => String(value ?? '').trim()).filter(Boolean))).sort();
+    const rightNorm = Array.from(new Set((Array.isArray(right) ? right : []).map(value => String(value ?? '').trim()).filter(Boolean))).sort();
+    if (leftNorm.length !== rightNorm.length) return false;
+    return leftNorm.every((value, index) => value === rightNorm[index]);
+  };
+
   const shiftTaskIdsForInsertion = (tasksList, insertId) => {
     return (Array.isArray(tasksList) ? tasksList : []).map(task => {
       const currentIdText = String(task?.id ?? '').trim();
@@ -242,24 +262,41 @@ const TaskInput = ({
   const handleInputChange = (field, value) => {
     setFormData(prev => {
       const next = { ...prev, [field]: value };
+      const parsedPerformers = parseInt(next.numberOfPerformers, 10);
+      const isDummyByPerformers = Number.isFinite(parsedPerformers) && parsedPerformers === 0;
 
-      if (field === 'numberOfPerformers' && next.laborIntensity) {
-        const laborHours = parseFloat(next.laborIntensity) || 0;
-        next.duration = String(calcDurationDays(laborHours, value, hoursPerDay));
-      } else if (field === 'numberOfPerformers' && next.duration) {
-        const durationDays = parseFloat(next.duration) || 0;
-        const laborHours = calcLaborHours(durationDays, value, hoursPerDay);
-        next.laborIntensity = laborHours ? String(laborHours) : '';
+      if (field === 'numberOfPerformers') {
+        if (isDummyByPerformers) {
+          next.laborIntensity = '0';
+        } else if (String(next.laborIntensity ?? '').trim()) {
+          const laborHours = parseFloat(next.laborIntensity) || 0;
+          next.duration = String(calcDurationDays(laborHours, next.numberOfPerformers, hoursPerDay));
+        } else if (String(next.duration ?? '').trim()) {
+          const durationDays = parseFloat(next.duration) || 0;
+          const laborHours = calcLaborHours(durationDays, next.numberOfPerformers, hoursPerDay);
+          next.laborIntensity = String(laborHours);
+        }
       }
+
       if (field === 'laborIntensity') {
-        const laborHours = parseFloat(value) || 0;
-        next.duration = String(calcDurationDays(laborHours, next.numberOfPerformers, hoursPerDay));
+        if (isDummyByPerformers) {
+          next.laborIntensity = '0';
+        } else {
+          const laborHours = parseFloat(value) || 0;
+          next.duration = String(calcDurationDays(laborHours, next.numberOfPerformers, hoursPerDay));
+        }
       }
+
       if (field === 'duration') {
-        const durationDays = parseFloat(value) || 0;
-        const laborHours = calcLaborHours(durationDays, next.numberOfPerformers, hoursPerDay);
-        next.laborIntensity = laborHours ? String(laborHours) : '';
+        if (isDummyByPerformers) {
+          next.laborIntensity = '0';
+        } else {
+          const durationDays = parseFloat(value) || 0;
+          const laborHours = calcLaborHours(durationDays, next.numberOfPerformers, hoursPerDay);
+          next.laborIntensity = String(laborHours);
+        }
       }
+
       return next;
     });
 
@@ -286,10 +323,9 @@ const TaskInput = ({
     if (
       !String(formData.id).trim() || 
       !String(formData.name).trim() || 
-      !String(formData.laborIntensity).trim() ||
       !String(formData.numberOfPerformers).trim() 
     ) {
-      setFormError('Пожалуйста, заполните все обязательные поля'); 
+      setFormError('Пожалуйста, заполните обязательные поля: ID, название и количество исполнителей.'); 
       return;
     }
 
@@ -301,40 +337,65 @@ const TaskInput = ({
       setFormError('ID работы должен быть в формате "N" или "N-M" (например, "3" или "1-2").');
       return;
     }
-    if (!editingTask && !isPostCalculationMode && taskListIdModeInfo.mode === 'mixed') {
-      setFormError('В проекте уже смешаны форматы ID. Приведите все ID к одному формату перед добавлением новых работ.');
-      return;
-    }
-    if (!editingTask && !isPostCalculationMode && taskListIdModeInfo.mode === 'invalid') {
+    if (!editingTask && taskListIdModeInfo.mode === 'invalid') {
       setFormError(`Обнаружены некорректные ID: ${taskListIdModeInfo.invalidIds.join(', ')}`);
       return;
     }
-    if (
-      !editingTask &&
-      !isPostCalculationMode &&
-      taskListIdModeInfo.mode !== 'empty' &&
-      taskListIdModeInfo.mode !== enteredTaskIdKind
-    ) {
-      setFormError(
-        `До первого расчета смешение форматов ID запрещено. Сейчас используются "${taskListIdModeInfo.mode === 'edge' ? 'N-M' : 'N'}", а введен "${enteredTaskIdKind === 'edge' ? 'N-M' : 'N'}".`
-      );
+    if (!editingTask && isManualMode && enteredTaskIdKind !== 'edge') {
+      setFormError('В ручном режиме доступны только ID вида "N-M", например "1-2".');
       return;
     }
-
-    const laborHours = parseFloat(formData.laborIntensity);
-    if (!Number.isFinite(laborHours) || laborHours <= 0) {
-      setFormError('Трудоемкость должна быть больше 0');
+    if (!editingTask && isAutoMode && !autoModeUnlocked && enteredTaskIdKind !== 'numeric') {
+      setFormError('В авто-режиме до первого расчета доступны только ID вида "N", например "3".');
+      return;
+    }
+    if (!editingTask && isAutoGraphBindingLocked && enteredTaskIdKind === 'numeric') {
+      setFormError('В авто-режиме после добавления ручных дуг N-M нельзя добавлять новые числовые работы. Сначала удалите ручные дуги N-M, если хотите перестроить основу графа.');
       return;
     }
 
     const performersRaw = parseInt(formData.numberOfPerformers, 10);
-    if (!Number.isFinite(performersRaw) || performersRaw <= 0) {
-      setFormError('Количество исполнителей должно быть больше 0');
+    if (!Number.isFinite(performersRaw) || performersRaw < 0) {
+      setFormError('Количество исполнителей должно быть целым числом не меньше 0.');
       return;
     }
     const performers = performersRaw;
-    const calculatedDuration = calcDurationDays(laborHours, performers, hoursPerDay);
-    if (!Number.isFinite(calculatedDuration) || calculatedDuration <= 0) {
+    const isDummyTask = performers === 0;
+
+    const laborText = String(formData.laborIntensity ?? '').trim();
+    const durationText = String(formData.duration ?? '').trim();
+    const laborHours = isDummyTask
+      ? 0
+      : parseFloat(formData.laborIntensity);
+
+    if (isDummyTask) {
+      if (!durationText.length) {
+        setFormError('Для фиктивной работы укажите продолжительность: 0 или больше.');
+        return;
+      }
+    } else if (!laborText.length) {
+      setFormError('Для обычной работы укажите трудоемкость.');
+      return;
+    }
+
+    if (!isDummyTask && (!Number.isFinite(laborHours) || laborHours <= 0)) {
+      setFormError('Для обычной работы трудоемкость должна быть больше 0.');
+      return;
+    }
+
+    const manualDuration = parseFloat(formData.duration);
+    if (isDummyTask) {
+      if (!Number.isFinite(manualDuration) || manualDuration < 0) {
+        setFormError('Для фиктивной работы продолжительность должна быть числом не меньше 0.');
+        return;
+      }
+    }
+
+    const calculatedDuration = isDummyTask
+      ? manualDuration
+      : calcDurationDays(laborHours, performers, hoursPerDay);
+
+    if (!isDummyTask && (!Number.isFinite(calculatedDuration) || calculatedDuration <= 0)) {
       setFormError('Не удалось рассчитать продолжительность. Проверьте исходные данные.');
       return;
     }
@@ -358,6 +419,14 @@ const TaskInput = ({
       setFormError(`Можно указать не более ${MAX_PREDECESSORS} предшественников.`);
       return;
     }
+    if (editingTask && isAutoGraphBindingLocked && enteredTaskIdKind === 'numeric') {
+      const existingPreds = normalizeTaskPredecessors(editingTask);
+      if (!areSamePredecessorSets(existingPreds, predecessors)) {
+        setFormError('После добавления ручных дуг N-M в авто-режиме нельзя менять предшественников числовых работ. Иначе изменится нумерация событий.');
+        return;
+      }
+    }
+
     if (enteredTaskIdKind === 'edge' && predecessors.length > 0) {
       const currentEdgeNodes = parseEdgeNodes(enteredTaskId);
       if (!currentEdgeNodes) {
@@ -406,10 +475,11 @@ const TaskInput = ({
       enteredTaskId,
       formData.name,
       calculatedDuration,
-      laborHours,
+      isDummyTask ? 0 : laborHours,
       performers,
       predecessors
       ),
+      isDummy: isDummyTask,
       templateId: normalizedTemplateId || null,
     };
 
@@ -482,9 +552,15 @@ const TaskInput = ({
   };
 
   const handleDelete = (taskId) => {
+    const deletedTaskId = String(taskId ?? '').trim();
+    const deletedTaskNum = toNaturalInt(deletedTaskId);
+
+    if (isAutoGraphBindingLocked && Number.isInteger(deletedTaskNum)) {
+      alert('В авто-режиме после добавления ручных дуг N-M нельзя удалять числовые работы. Сначала удалите ручные дуги N-M, если хотите перестроить основу графа.');
+      return;
+    }
+
     if (confirm('Вы уверены, что хотите удалить эту задачу?')) {
-      const deletedTaskId = String(taskId ?? '').trim();
-      const deletedTaskNum = toNaturalInt(deletedTaskId);
       const remainingTasks = tasks.filter(task => String(task?.id ?? '').trim() !== deletedTaskId);
 
       if (Number.isInteger(deletedTaskNum)) {
@@ -689,28 +765,64 @@ const TaskInput = ({
             </div>
 
             <div className="space-y-2">
+              <Label>Режим построения графа</Label>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant={isAutoMode ? 'default' : 'outline'}
+                  onClick={() => onProjectModeChange?.('auto_aoa')}
+                  disabled={isModeSelectionLocked}
+                >
+                  Авто-режим AOA
+                </Button>
+                <Button
+                  type="button"
+                  variant={isManualMode ? 'default' : 'outline'}
+                  onClick={() => onProjectModeChange?.('manual_aoa')}
+                  disabled={isModeSelectionLocked}
+                >
+                  Ручной режим AOA
+                </Button>
+                {isAutoMode && autoModeUnlocked && (
+                  <Badge variant="secondary">N-M разблокирован</Badge>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {isAutoMode
+                  ? 'Авто-режим: до первого расчета вводятся работы с ID вида "N". После первого успешного расчета можно добавлять и ID вида "N-M".'
+                  : 'Ручной режим: пользователь задает дуги сам, поэтому ввод разрешен только в формате "N-M".'}
+              </p>
+              {isModeSelectionLocked && (
+                <p className="text-xs text-muted-foreground">
+                  Режим фиксируется после добавления первой работы. Чтобы изменить режим, очистите список работ.
+                </p>
+              )}
+              {isAutoGraphBindingLocked && (
+                <p className="text-xs text-amber-700">
+                  К текущему авто-графу уже привязаны ручные дуги N-M. Пока они существуют, нельзя добавлять, удалять или перепривязывать числовые работы, иначе изменится нумерация событий.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="id">ID работы *</Label>
               <Input
                 id="id"
                 value={formData.id}
                 onChange={(e) => handleInputChange('id', e.target.value)}
-                placeholder="1-2"
+                placeholder={isManualMode ? '1-2' : autoModeUnlocked ? '3 или 1-2' : '3'}
                 disabled={editingTask !== null}
               />
               <p className="text-xs text-muted-foreground">
-                {isPostCalculationMode
-                  ? 'После расчета можно добавлять ID в форматах "N" и "N-M".'
-                  : `До первого расчета используйте один формат ID: ${
-                      taskListIdModeInfo.mode === 'numeric'
-                        ? 'только "N" (например, 3)'
-                        : taskListIdModeInfo.mode === 'edge'
-                          ? 'только "N-M" (например, 1-2)'
-                          : '"N" или "N-M", но далее придерживайтесь выбранного формата'
-                    }.`}
+                {isManualMode
+                  ? 'В ручном режиме доступен только формат "N-M", например "1-2".'
+                  : autoModeUnlocked
+                    ? 'В авто-режиме после первого расчета можно использовать оба формата: "N" и "N-M".'
+                    : 'В авто-режиме до первого расчета используйте только формат "N", например "3".'}
               </p>
-              {!isPostCalculationMode && taskListIdModeInfo.mode === 'mixed' && (
-                <p className="text-xs text-red-600">
-                  Внимание: в списке уже смешаны форматы ID. Расчет будет заблокирован до исправления.
+              {editingTask !== null && (
+                <p className="text-xs text-muted-foreground">
+                  При редактировании формат и значение ID не меняются.
                 </p>
               )}
             </div>
@@ -729,15 +841,17 @@ const TaskInput = ({
                     ? Math.ceil((template.base_duration_minutes / 60) * 10) / 10
                     : null;
 
-                  const durationDays = laborHours != null
-                    ? String(calcDurationDays(laborHours, formData.numberOfPerformers, hoursPerDay))
-                    : formData.duration;
+                  const durationDays = isDummyFormMode
+                    ? formData.duration
+                    : laborHours != null
+                      ? String(calcDurationDays(laborHours, formData.numberOfPerformers, hoursPerDay))
+                      : formData.duration;
 
                   setFormData(f => ({
                     ...f,
-                    id: String(template?.id ?? f.id),
+                    id: isAutoMode ? String(template?.id ?? f.id) : f.id,
                     name: template?.name ?? f.name,
-                    laborIntensity: laborHours != null ? String(laborHours) : f.laborIntensity,
+                    laborIntensity: isDummyFormMode ? '0' : (laborHours != null ? String(laborHours) : f.laborIntensity),
                     duration: durationDays,
                   }));
                   setSelectedTemplateId(String(template?.id ?? ''));
@@ -813,14 +927,15 @@ const TaskInput = ({
                 id="duration"
                 type="number"
                 step="0.1"
-                min="0.1"
+                min="0"
                 value={formData.duration}
-                placeholder="10"
-                readOnly
-                disabled
-                tabIndex={-1}
-                className="pointer-events-none"
-                title="Рассчитывается автоматически из трудоемкости, исполнителей и длительности рабочего дня"
+                placeholder={isDummyFormMode ? '0 или 5' : '10'}
+                readOnly={!isDummyFormMode}
+                disabled={!isTaskIdentityReady || !isDummyFormMode}
+                tabIndex={isDummyFormMode ? 0 : -1}
+                className={isDummyFormMode ? '' : 'pointer-events-none'}
+                title={isDummyFormMode ? 'Для фиктивной работы продолжительность вводится вручную' : 'Рассчитывается автоматически из трудоемкости, исполнителей и длительности рабочего дня'}
+                onChange={(e) => handleInputChange('duration', e.target.value)}
               />
             </div>
 
@@ -831,10 +946,10 @@ const TaskInput = ({
                 type="number"
                 step="0.1"
                 min="0"
-                value={formData.laborIntensity}
+                value={isDummyFormMode ? '0' : formData.laborIntensity}
                 onChange={(e) => handleInputChange('laborIntensity', e.target.value)}
-                placeholder="80"
-                disabled={!isTaskIdentityReady}
+                placeholder={isDummyFormMode ? '0' : '80'}
+                disabled={!isTaskIdentityReady || isDummyFormMode}
               />
             </div>
 
@@ -843,17 +958,25 @@ const TaskInput = ({
               <Input
                 id="numberOfPerformers"
                 type="number"
-                min="1"
+                min="0"
                 value={formData.numberOfPerformers}
                 onChange={(e) => handleInputChange('numberOfPerformers', e.target.value)}
                 placeholder="2"
                 disabled={!isTaskIdentityReady}
               />
+              <p className="text-xs text-muted-foreground">
+                Если исполнителей 0, работа считается фиктивной: трудоемкость фиксируется в 0, а продолжительность задается вручную.
+              </p>
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="predecessors">Предшественники</Label>
               <div id="predecessors" className="space-y-2">
+                {isEditingLockedNumericTask && (
+                  <p className="text-xs text-amber-700">
+                    Для этой числовой работы предшественники заблокированы, потому что к текущему графу уже привязаны ручные дуги N-M.
+                  </p>
+                )}
                 {predecessorSelections.map((selectedValue, rowIndex) => {
                   const selectedInOtherRows = new Set(
                     predecessorSelections
@@ -886,7 +1009,7 @@ const TaskInput = ({
                           setFormError('');
                         }}
                         className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                        disabled={!isTaskIdentityReady}
+                        disabled={!isTaskIdentityReady || isEditingLockedNumericTask}
                       >
                         <option value="">Без предшественника</option>
                         {hasLegacyValue && (
@@ -915,7 +1038,7 @@ const TaskInput = ({
                           }));
                           setFormError('');
                         }}
-                        disabled={!isTaskIdentityReady}
+                        disabled={!isTaskIdentityReady || isEditingLockedNumericTask}
                       >
                         -
                       </Button>
@@ -933,7 +1056,7 @@ const TaskInput = ({
                     setPredecessorSelections(prev => [...prev, '']);
                     setFormError('');
                   }}
-                  disabled={!isTaskIdentityReady || !canAddPredecessorRow}
+                  disabled={!isTaskIdentityReady || !canAddPredecessorRow || isEditingLockedNumericTask}
                 >
                   + Добавить предшественника
                 </Button>
